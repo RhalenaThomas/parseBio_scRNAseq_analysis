@@ -1,0 +1,1098 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(tidyverse)
+#library(CelltypeR)
+```
+
+
+
+```{r}
+seu <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/Parse48_analysisMaria.RDS")
+
+unique(seu$sample)
+
+Idents(seu) <- "sample"
+levels(seu)
+
+samples <- levels(seu)
+samples
+
+```
+
+Add meta data information
+
+```{r}
+# using celltypeR function
+
+# add the culture type NPC, DA neurons 2weeks, Motor neurons
+new_vector <- ifelse(grepl("NPC", samples), "NPC",
+                     ifelse(grepl("Final", samples), "Neurons2weeks",
+                            ifelse(grepl("^M", samples), "MotorNeurons", "Other")))
+
+# Print the new vector
+print(new_vector)
+
+seu <- annotate(seu, annotations = new_vector, to_label = "sample",annotation_name = "CultureType")
+
+DimPlot(seu)
+
+# check with sample names
+
+table(seu$sample, seu$CultureType)
+
+
+```
+
+Add the lines and then the diseases status
+
+```{r}
+
+  # Create a new vector with line names
+new_line_vector <- gsub("^(NPC|Final)", "", samples)
+new_line_vector <- gsub("3123$", "3123-iso", new_line_vector)
+new_line_vector[new_line_vector == "P65P"] <- "3123-isoP65P"
+new_line_vector[new_line_vector == "Q65Q"] <- "3123-isoQ65Q"
+
+# Print the new vector with line names
+
+
+new_line_vector[new_line_vector == "2AIW002-02"] <- "AIW002-02"
+
+print(new_line_vector)
+
+seu <- annotate(seu, annotations = new_line_vector, to_label = "sample",annotation_name = "Line")
+
+
+# check
+table(seu$sample, seu$Line)
+
+```
+```{r, fig.width=6}
+DimPlot(seu)
+```
+
+
+```{r}
+# add disease status
+
+# Create the lookup table for Line to DiseaseStatus mapping
+line_to_disease <- c("3448" = "HC",
+                     "TD22" = "HC",
+                     "AIW001-02" = "HC",
+                     "AIW002-02" = "HC",
+                     "2965" = "PD",
+                     "3383" = "PD",
+                     "3575" = "PD",
+                     "TD06" = "PD",
+                     "TD07" = "PD",
+                     "3123" = "PD",
+                     "3567" = "PD",
+                     "3595" = "PD",
+                     "3940" = "PD",
+                     "3567-iso" = "PD-iso",
+                     "3940R-iso" = "PD-iso",
+                     "TD06-iso" = "PD-iso",
+                     "3940N-iso" = "PD-iso",
+                     "3123-isoQ65Q" = "PD-iso",
+                     "3123-isoP65P" = "PD-iso",
+                     "3123-iso" = "PD-iso",
+                     "3383-iso" = "PD-iso",
+                     "3575-iso" = "PD-iso",
+                     "3595-iso" = "PD-iso")
+
+# Assuming "Line" is your starting character vector
+Idents(seu) <- "Line"
+Line <- levels(seu)
+# Create a new vector of disease statuses using the lookup table
+disease_status_vector <- ifelse(Line %in% names(line_to_disease), 
+                                line_to_disease[Line], 
+                                "other")
+
+# Print the new vector of disease statuses
+print(disease_status_vector)
+
+seu <- annotate(seu, annotations = disease_status_vector, to_label = "Line",annotation_name = "DiseaseStatus")
+
+
+# check
+table(seu$Line, seu$DiseaseStatus)
+
+
+```
+
+```{r}
+cellcounts <- as.data.frame(table(seu$Line,seu$CultureType))
+table(seu$Line,seu$CultureType,seu$DiseaseStatus)
+
+# Convert long_df to the wide format
+wide_df <- pivot_wider(cellcounts, 
+                       id_cols = Var1, 
+                       names_from = Var2, 
+                       values_from = Freq)
+
+write.csv(wide_df,"cellcounts_sample.csv")
+
+```
+
+```{r}
+DimPlot(seu, group.by = "DiseaseStatus")
+
+```
+
+
+
+
+Subset for to remove pools and Maria's samples
+
+```{r}
+unique(seu$sample)
+Idents(seu) <- "DiseaseStatus"
+
+seu.n <- subset(seu, idents = c("HC","PD","PD-iso"))
+dim(seu.n)
+dim(seu)
+
+DimPlot(seu.n)
+
+```
+Reprocess subset
+
+```{r}
+
+seu.n <- RunPCA(seu.n, npcs = 20, verbose = FALSE)
+seu.n <- RunUMAP(seu.n, reduction = "pca", dims = 1:20, n.neighbors = 81)
+DimPlot(seu.n)
+seu.n$CultureType
+DimPlot(seu.n, group.by = "CultureType")
+DimPlot(seu.n, group.by = "Line")
+
+```
+
+```{r}
+seu.n <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamples.RDS")
+  
+```
+
+
+
+Get clusters
+
+```{r}
+seu.n <- NormalizeData(seu.n)
+seu.n <- FindVariableFeatures(seu.n)
+seu.n <- FindNeighbors(seu.n, dims = 1:20, k.param = 81)
+seu.n <- FindClusters(seu.n, resolution = 0.3)
+DimPlot(seu.n, group.by = "RNA_snn_res.0.3")
+#seu.n$RNA_snn_res.0.3
+DimPlot(seu.n, group.by = "CultureType")
+
+```
+
+
+
+
+
+Subset out neurons and NPC
+
+```{r}
+
+#seu.n$CultureType
+Idents(seu.n) <- "CultureType"
+neurons <- subset(seu.n, idents = "Neurons2weeks")
+
+Idents(seu.n) <- "CultureType"
+NPC <- subset(seu.n, idents = "NPC")
+
+```
+
+```{r}
+
+seu <- neurons
+seu <- RunPCA(seu, npcs = 20, verbose = FALSE)
+seu <- RunUMAP(seu, reduction = "pca", dims = 1:20, n.neighbors = 81)
+seu <- FindVariableFeatures(seu)
+seu <- FindNeighbors(seu, dims = 1:20, k.param = 81)
+seu <- FindClusters(seu, resolution = 0.3)
+DimPlot(seu)
+DimPlot(seu, group.by = "CultureType")
+DimPlot(seu, group.by = "Line")
+
+neurons <- seu
+
+```
+
+Integration
+
+```{r}
+
+
+
+```
+
+```{r}
+seu <- NPC
+seu <- RunPCA(seu, npcs = 20, verbose = FALSE)
+seu <- RunUMAP(seu, reduction = "pca", dims = 1:20, n.neighbors = 81)
+seu <- FindVariableFeatures(seu)
+seu <- FindNeighbors(seu, dims = 1:20, k.param = 81)
+seu <- FindClusters(seu, resolution = 0.3)
+DimPlot(seu)
+DimPlot(seu, group.by = "CultureType")
+DimPlot(seu, group.by = "Line")
+
+NPC <- seu
+
+DimPlot(NPC, group.by = "DiseaseStatus")
+
+```
+
+
+
+save objects 
+```{r}
+
+saveRDS(seu, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/Parse48_allSamples.RDS")
+
+saveRDS(seu.n, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamples.RDS")
+saveRDS(neurons, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNeurons.RDS")
+saveRDS(NPC, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPC.RDS")
+
+
+NPC <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPC.RDS")
+
+
+```
+
+```{r}
+table(NPC$Line)
+Idents(NPC) <- "Line"
+levels(NPC)
+table(NPC$DiseaseStatus,NPC$Line)
+
+```
+
+```{r}
+
+
+```
+
+
+
+Now integrate samples
+
+```{r}
+
+# All samples is too large to integrate 
+
+table(NPC$Line)
+# subset out the each disease type and then just merge
+Idents(NPC) <- "DiseaseStatus"
+levels(NPC)
+NPC.PD <- subset(NPC, idents = "PD")
+Idents(NPC.PD) <- "DiseaseStatus"
+levels(NPC.PD)
+Idents(NPC) <- "DiseaseStatus"
+NPC.PDiso <- subset(NPC, idents = "PD-iso")
+dim(NPC.PDiso)
+Idents(NPC.PDiso) <- "DiseaseStatus"
+levels(NPC.PDiso)
+Idents(NPC) <- "DiseaseStatus"
+NPC.HC <- subset(NPC, idents = "HC")
+Idents(NPC.HC) <- "DiseaseStatus"
+levels(NPC.HC)
+Idents(NPC.HC) <- "Line"
+levels(NPC.HC)
+# make a list of seurat objects by our cell type variable
+# will integrate the PD, PD-iso, HC separately and then merge them will see if will integrate or not
+
+# PD
+sublist <- SplitObject(NPC.PD, split.by = "Line")
+# normalize and find variable features
+for (i in 1:length(sublist)){
+  sublist[[i]] <- NormalizeData(sublist[[i]], verbose = FALSE)
+  sublist[[i]] <- FindVariableFeatures(sublist[[i]], selection.method = "vst")
+}
+# Create an empty Seurat object to store the integrated data
+# Take the first Seurat object from the list as the starting point
+integrated_seurat <- subset(sublist[[1]])
+# Iterate over the list of Seurat objects
+for (i in 1:length(sublist)) {
+  # Rename the 'orig.ident' metadata inside the seurat object to match the object name in the list
+  sublist[[i]]$orig.ident <- names(sublist)[i]
+
+}
+
+sample.list <- sublist
+for (i in 1:length(sample.list)) {
+  # Normalize and scale the data
+  sample.list[[i]] <- NormalizeData(sample.list[[i]], verbose = FALSE)
+  sample.list[[i]] <- ScaleData(sample.list[[i]], verbose = FALSE)
+  # Find variable features
+  sample.list[[i]] <- FindVariableFeatures(sample.list[[i]], selection.method = "vst")
+  # Get the variable features
+  variable_features <- VariableFeatures(sample.list[[i]])
+  # Run PCA with the variable features
+  sample.list[[i]] <- RunPCA(sample.list[[i]], verbose = FALSE, npcs = 30, features = variable_features)
+}
+int.anchors <- FindIntegrationAnchors(object.list = sample.list, dims = 1:30, reduction = "rpca")
+integrated_seurat <- IntegrateData(anchorset = int.anchors,  dims = 1:30)
+int.PD <- integrated_seurat
+Idents(int.PD) <- "Line"
+levels(int.PD)
+
+
+
+
+```
+
+```{r}
+# an integrate funcrion
+
+# Define a function for integrating a list of Seurat objects
+integrate_seurat_objects <- function(seurat_list, dims = 1:30) {
+  # Normalize and find variable features for each object
+  for (i in 1:length(seurat_list)) {
+    seurat_list[[i]] <- NormalizeData(seurat_list[[i]], verbose = FALSE)
+    seurat_list[[i]] <- FindVariableFeatures(seurat_list[[i]], selection.method = "vst")
+  }
+
+  # Create an empty Seurat object to store the integrated data
+  integrated_seurat <- subset(seurat_list[[1]])
+
+  # Iterate over the list of Seurat objects
+  for (i in 1:length(seurat_list)) {
+    # Rename the 'orig.ident' metadata inside the Seurat object to match the object name in the list
+    seurat_list[[i]]$orig.ident <- names(seurat_list)[i]
+  }
+
+  sample.list <- seurat_list
+  for (i in 1:length(sample.list)) {
+    # Normalize and scale the data
+    sample.list[[i]] <- NormalizeData(sample.list[[i]], verbose = FALSE)
+    sample.list[[i]] <- ScaleData(sample.list[[i]], verbose = FALSE)
+    # Find variable features
+    sample.list[[i]] <- FindVariableFeatures(sample.list[[i]], selection.method = "vst")
+    # Get the variable features
+    variable_features <- VariableFeatures(sample.list[[i]])
+    # Run PCA with the variable features
+    sample.list[[i]] <- RunPCA(sample.list[[i]], verbose = FALSE, npcs = 30, features = variable_features)
+  }
+
+  # Find integration anchors
+  int.anchors <- FindIntegrationAnchors(object.list = sample.list, dims = dims, reduction = "rpca")
+
+  # Integrate data
+  integrated_seurat <- IntegrateData(anchorset = int.anchors, dims = dims)
+
+  return(integrated_seurat)
+}
+
+
+
+```
+
+Use function to integrate the HC
+
+```{r}
+
+sublist <- SplitObject(NPC.HC, split.by = "Line")
+
+int.HC <- integrate_seurat_objects(sublist, dims = 1:30)
+
+sublist <- SplitObject(NPC.PDiso, split.by = "Line")
+
+int.iso <- integrate_seurat_objects(sublist, dims = 1:30)
+
+
+
+```
+
+
+
+```{r}
+
+# Create a list of the three Seurat objects
+DefaultAssay(int.HC) <- "RNA"
+DefaultAssay(int.PD) <- "RNA"
+DefaultAssay(int.PDiso) <- "RNA"
+NPC_list <- list("HC" = int.HC,"PD" = int.PD,"PD-iso" = int.PDiso)
+
+#listPDHC <- list("HC" = int.HC, "PD" = int.PD)
+# Integrate the Seurat objects
+integrated_seurat <- integrate_seurat_objects(NPC_list, dims = 1:20)
+
+#integrated_seurat <- integrate_seurat_objects(listPDHC, dims = 1:30)
+
+
+
+```
+
+```{r}
+# save integrated objects
+saveRDS(int.HC, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPCintHC.RDS")
+saveRDS(int.PD, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPCintPD.RDS")
+saveRDS(int.PDiso, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPCintPDiso.RDS")
+
+
+int.PD <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPCintPD.RDS")
+int.HC <-readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPCintHC.RDS")
+int.PDiso <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPCintPDiso.RDS")
+
+
+```
+
+
+
+
+```{r}
+# make UMAP from integrated
+seu <- integrated_seurat
+table(seu$DiseaseStatus)
+
+
+seu <- ScaleData(seu)
+seu <- RunPCA(seu, npcs = 20, verbose = FALSE)
+seu <- RunUMAP(seu, reduction = "pca", dims = 1:20, n.neighbors = 81)
+seu <- FindVariableFeatures(seu)
+seu <- FindNeighbors(seu, dims = 1:20, k.param = 81)
+seu <- FindClusters(seu, resolution = 0.3)
+DimPlot(seu)
+DimPlot(seu, group.by = "Line")
+DimPlot(seu, group.by = "DiseaseStatus")
+
+
+```
+
+
+```{r}
+saveRDS(seu,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesintegratedNPCs.RDS")
+
+```
+
+
+
+Annotate the NPC clusters
+
+1. Find markers and Check Enricher
+2. Get marker list score and 
+
+
+
+
+Marker list
+```{r}
+
+da_neurons <- c("TH","SLC6A3","SLC18A2","SOX6","NDNF","SNCG","ALDH1A1","CALB1","TACR2","SLC17A6","SLC32A1","OTX2","GRP","LPL","CCK","VIP")
+NPC_orStemLike <- c("DCX","NEUROD1","TBR1","PCNA","MKI67","SOX2","NES","PAX6")
+mature_neurons = c("RBFOX3","SYP","VAMP1","VAMP2","TUBB3","SYT1","BSN","HOMER1","SLC17A6")
+excitatory_neurons = c("GRIA2","GRIA1","GRIA4","GRIN1","GRIN2B","GRIN2A","GRIN3A","GRIN3","GRIP1","CAMK2A")
+inhbitory_neurons = c("GAD1","GAD2", "GAT1","PVALB","GABR2","GABR1","GBRR1","GABRB2","GABRB1","GABRB3","GABRA6","GABRA1","GABRA4","TRAK2")
+astrocytes <- c("GFAP","S100B","AQP4","APOE", "SOX9","SLC1A3")
+oligodendrocytes <- c("MBP","MOG","OLIG1","OLIG2","SOX10")
+
+radial_glia <- c("PTPRC","AIF1","ADGRE1", "VIM", "TNC","PTPRZ1","FAM107A","HOPX","LIFR",
+              "ITGB5","IL6ST","SLC1A3")
+epithelial <- c("HES1","HES5","SOX2","SOX10","NES","CDH1","NOTCH1")
+
+microglia <- c("IBA1","P2RY12","P2RY13","TREM119", "GPR34","SIGLECH","TREM2",
+               "CX3CR1","FCRLS","OLFML3","HEXB","TGFBR1", "SALL1","MERTK",
+               "PROS1")
+
+features_list <- c("MKI67","SOX2","POU5F1","DLX2","PAX6","SOX9","HES1","NES","RBFOX3","MAP2","NCAM1","CD24","GRIA2","GRIN2B","GABBR1","GAD1","GAD2","GABRA1","GABRB2","TH","ALDH1A1","LMX1B","NR4A2","CORIN","CALB1","KCNJ6","CXCR4","ITGA6","SLC1A3","CD44","AQP4","S100B", "PDGFRA","OLIG2","MBP","CLDN11","VIM","VCAM1")
+
+short_list <- c("MKI67","SOX9","HES1","NES","DLX2","RBFOX3","MAP2","TH","CALB1","KCNJ6","SLC1A3","CD44","AQP4","S100B","OLIG2","MBP","VIM")
+
+
+gene_lists = list("DA_neurons" = da_neurons, "NPC" = NPC_orStemLike,
+                  "Neurons" = mature_neurons, 
+                  "Oligo" = oligodendrocytes, "RadialGlia" = radial_glia,
+                  "Epithelial" = epithelial)
+
+```
+
+
+```{r}
+#seu$integrated_snn_res.0.3
+Idents(seu) <- "integrated_snn_res.0.3"
+DefaultAssay(seu) <- "RNA"
+# Assuming you have already defined your Seurat object "seu" and "da_neurons" gene list
+# Add module scores for the "da_neurons" gene list
+
+seu <- AddModuleScore(
+  seu,
+  features = da_neurons,
+  pool = NULL,
+  nbin = 100,
+  ctrl = 4,
+  k = FALSE
+)
+
+calculate_module_scores <- function(seurat_object, gene_lists) {
+  result <- list()
+  
+  for (gene_list_name in names(gene_lists)) {
+    # Add module scores for each gene list
+    seurat_object <- AddModuleScore(
+      seurat_object,
+      features = gene_lists[[gene_list_name]],
+      name = gene_list_name,
+      pool = NULL,
+      nbin = 100,
+      ctrl = 4,
+      k = FALSE
+    )
+    
+    # Extract the module scores for each cluster
+    module_scores <- seurat_object@assays[gene_list_name]
+    cluster_names <- colnames(module_scores)
+    
+    # Convert non-numeric values to NA
+    module_scores[!is.numeric(module_scores)] <- NA
+    
+    # Calculate the mean module score for each cluster
+    cluster_scores <- rowMeans(as.matrix(module_scores), na.rm = TRUE)
+    
+    # Create a data frame to store the scores for this gene list
+    gene_list_scores <- data.frame(Cluster = cluster_names, Score = cluster_scores)
+    
+    # Store the gene list scores in the result list
+    result[[gene_list_name]] <- gene_list_scores
+  }
+  
+  return(result)
+}
+
+# Assuming you have already defined your Seurat object "seu" and "gene_lists"
+# Calculate module scores for each gene list in "gene_lists"
+module_scores_per_gene_list <- calculate_module_scores(seu, gene_lists)
+
+
+# Combine the module scores into a single table
+module_scores_table <- do.call(rbind, module_scores_per_gene_list)
+
+# Print the table
+print(module_scores_table)
+
+
+
+```
+
+```{r}
+Idents(seu) <- "integrated_snn_res.0.3"
+
+for (i in da_neurons) {
+  print(FeaturePlot(seu, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+```
+
+```{r}
+Idents(seu) <- "integrated_snn_res.0.3"
+
+for (i in NPC_orStemLike) {
+  print(FeaturePlot(seu, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+```
+```{r}
+Idents(seu) <- "integrated_snn_res.0.3"
+
+for (i in mature_neurons) {
+  print(FeaturePlot(seu, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+```
+
+```{r}
+DimPlot(seu)
+```
+
+```{r}
+Idents(seu) <- "integrated_snn_res.0.3"
+
+for (i in astrocytes) {
+  print(FeaturePlot(seu, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+```
+
+```{r}
+Idents(seu) <- "integrated_snn_res.0.3"
+
+for (i in radial_glia) {
+  print(FeaturePlot(seu, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+```
+
+
+```{r}
+Idents(seu) <- "integrated_snn_res.0.3"
+
+for (i in epithelial) {
+  print(FeaturePlot(seu, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+```
+```{r}
+Idents(seu) <- "integrated_snn_res.0.3"
+
+for (i in oligodendrocytes) {
+  print(FeaturePlot(seu, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+```
+Find Markers
+
+```{r}
+ClusterMarkers <- FindAllMarkers(seu, only.pos = TRUE)
+
+```
+
+
+```{r}
+library(enrichR)
+setEnrichrSite("Enrichr") # Human genes
+# list of all the databases
+# get the possible libraries
+dbs <- listEnrichrDbs()
+
+# this will list the possible libraries
+dbs
+
+# select libraries with cell types
+db <- c('CellMarker_Augmented_2021','Azimuth_Cell_Types_2021')
+
+# function for a quick look
+checkCelltypes <- function(cluster_num = 0){
+  clusterX <- ClusterMarkers %>% filter(cluster == cluster_num & avg_log2FC > 0.25)
+  genes <- clusterX$gene
+  # the cell type libraries
+  # get the results for each library
+  clusterX.cell <- enrichr(genes, databases = db)
+  # visualize the results
+print(plotEnrich(clusterX.cell[[1]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'CellMarker_Augmented_2021'))
+print(plotEnrich(clusterX.cell[[2]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'Azimuth_Cell_Types_2021'))
+
+}
+
+
+```
+
+Plot top markers
+
+```{r}
+head(ClusterMarkers)
+top5 <- ClusterMarkers %>% group_by(cluster) %>% top_n(n=5, wt =avg_log2FC)
+
+DefaultAssay(seu) <- "RNA"
+seu <- NormalizeData(seu)
+seu <- ScaleData(seu)
+
+top5
+
+top2 <- ClusterMarkers %>% group_by(cluster) %>% top_n(n=2, wt =avg_log2FC)
+DoHeatmap(seu, features = top5$gene, size = 3, angle = 90, group.by = "integrated_snn_res.0.3")
+
+DoHeatmap(seu, features = top2$gene, size = 3, angle = 90, group.by = "integrated_snn_res.0.3")
+
+```
+
+
+
+Quick look
+
+```{r}
+checkCelltypes(cluster_num = 11)
+
+```
+
+Add cell types - fine resolution
+
+```{r}
+
+#library(CelltypeR)
+celltypes1 <- c("NPC-stem-ELMO1","NeuronGABA","Progenitor","Epithelial-RG",
+                "NPC-div-PAX6-SOX6","Neurons_im1","Neurons_im2",
+                "NPC-div-PAX6","NeuronsGlut","RG-stem","NPC-PAX6","Endothelial")
+
+seu <- annotate(seu, annotations = celltypes1, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes1")
+DimPlot(seu, label = TRUE)
+
+# cell types main
+celltypesmain <- c("NPC","Neuron","NPC","Epithelial",
+                "NPC","Neuron","Neuron",
+                "NPC","Neuron","Stem","NPC","Endothelial")
+
+seu <- annotate(seu, annotations = celltypesmain, to_label = "integrated_snn_res.0.3",annotation_name = "CelltypesMain")
+DimPlot(seu, label = TRUE)
+
+# some subgroups
+celltypes2 <- c("NPC1","Neuron1","Progenitor","Epithelial",
+                "NPC2","Neuron2","Neurons3",
+                "NPC3","Neurons4","Stem","NPC4","Endothelial")
+
+seu <- annotate(seu, annotations = celltypes2, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes2")
+DimPlot(seu, label = TRUE)
+
+
+celltypes3 <- c("NPC-div","NeuronGABA","Progenitor","Epithelial",
+                "NPC-DA","NeuronDA","Neuron",
+                "NPC-div","NeuronDA","Stem","NPC-DA","Endothelial")
+
+seu <- annotate(seu, annotations = celltypes3, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes3")
+DimPlot(seu, label = TRUE)
+
+```
+
+Save this object.
+
+
+
+Now get the aggregated data for differential expression
+
+```{r}
+
+Idents(seu) <- "Celltype3s"
+sum_counts <- AggregateExpression(seu, assay = "RNA", group.by = c("Celltypes3","Line","DiseaseStatus"))
+# this creates a list
+sum_counts_df <- as.data.frame(sum_counts$RNA)
+head(sum_counts_df)
+class(sum_counts_df)
+dim(sum_counts_df)
+# dataframe with rows as genes and columns as the sample names 
+# names include celltype_line_diseasestatus
+
+# example NPC-div_2965_PD
+
+write.csv(sum_counts_df, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/SumCounts_NPC_from48sample.csv")
+
+```
+To run DGE we need to make the meta data table
+
+```{r}
+# Assuming df is the name of your dataframe
+df <- sum_counts_df
+
+sample <- as.data.frame(colnames(df))
+colnames(sample) <- "sample"
+print(sample$sample)
+
+
+# Extract values for "Line," and "DiseaseStatus" and "Celltype" using regular expressions
+sample_names <- sample$sample
+sample_info <- strsplit(sample_names, "_")
+sample_info <- do.call(rbind, sample_info)
+
+# Create new columns for "Batch," "Line," and "DiseaseStatus"
+sample$Celltype <- sample_info[, 1]
+sample$Line <- sample_info[, 2]
+sample$DiseaseStatus <- sample_info[, 3]
+
+# Display the updated dataframe
+print(sample)
+meta.df <- sample
+
+head(meta.df)
+
+```
+
+```{r}
+library(DESeq2)
+
+# Create an empty list to store the results for each cell type
+list.results <- vector("list", length(Celltypes))
+
+# Loop through each cell type and perform DESeq analysis
+for (i in seq_along(Celltypes)) {
+  # Subset the expression dataframe by the current cell type
+  print(Celltypes[i])
+  df_sub <- df.trans[grepl(paste0("^", Celltypes[i], "_"), rownames(df.trans)), ]
+  print(dim(df_sub))
+  # test one cell group
+  #i = "NPC-div"
+  df.meta_sub <- df.meta[df.meta$Celltype == Celltypes[i], ]
+  print(dim(df.meta_sub))
+  # Prepare the DESeq object
+  dft <- as.data.frame(t(df_sub)) # Transpose the subset dataframe to get genes as rows and samples as columns
+  dfi <- lapply(dft, as.integer)
+  dfi <- as.data.frame(dfi)
+  rownames(dfi) <- rownames(dft)
+  # Create the DESeqDataSet object using the subset dataframe and metadata
+  dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~DiseaseStatus)
+  # Perform DESeq analysis
+  dds <- DESeq(dds)
+  # Store the DESeq results in the list with the cell type as the list index
+  res <- results(dds)
+  list2 <- list()
+  list2[["dds"]] <- dds
+  list2[["results"]] <- res
+  
+  # Initialize an empty list to store the results for each contrast
+  all_results <- list()
+  # Loop through each contrast and calculate the results
+  for (j in 1:(length(all_contrasts) - 1)) {
+    for (k in (j + 1):length(all_contrasts)) {
+      contrast_level1 <- all_contrasts[j]
+      contrast_level2 <- all_contrasts[k]
+      
+      # Check if both levels have at least one sample
+      if (any(dds$DiseaseStatus %in% c(contrast_level1, contrast_level2))) {
+        # Check if contrast levels are different
+        if (contrast_level1 != contrast_level2) {
+          contrast_name <- paste("DiseaseStatus", contrast_level1, "vs", contrast_level2)
+          # Filter rows with complete cases for the current contrast levels
+          complete_cases <- complete.cases(dds$DiseaseStatus, dds$DiseaseStatus %in% c(contrast_level1, contrast_level2))
+          # Subset the DESeq object and calculate the contrast results
+          dds_sub <- dds[complete_cases, ]
+          
+          # Check if both levels still exist in the subset after removing missing values
+          if (contrast_level1 %in% unique(dds_sub$DiseaseStatus) && contrast_level2 %in% unique(dds_sub$DiseaseStatus)) {
+            contrast_result <- results(dds_sub, contrast = c("DiseaseStatus", contrast_level1, contrast_level2), name = contrast_name)
+            all_results[[contrast_name]] <- contrast_result
+          } else {
+            message(paste("Skipping", contrast_name, "due to missing contrast levels in DiseaseStatus."))
+          }
+        } else {
+          message(paste("Skipping", contrast_level1, "vs", contrast_level2, "since they are the same level."))
+        }
+      }
+    }
+  }
+  
+  # Add the contrast results to the list
+  list2[["contrast_results"]] <- all_results
+  
+  # Store the list for the current cell type in the appropriate slot
+  list.results[[i]] <- list2
+}
+
+
+
+names(list.results) <- Celltypes
+
+
+
+```
+
+Same loop that should add the cell type names
+
+```{r}
+# Create an empty list to store the results for each cell type
+list.results <- setNames(vector("list", length(Celltypes)), Celltypes)
+
+# Loop through each cell type and perform DESeq analysis
+for (i in seq_along(Celltypes)) {
+  # Subset the expression dataframe by the current cell type
+  print(Celltypes[i])
+  df_sub <- df.trans[grepl(paste0("^", Celltypes[i], "_"), rownames(df.trans)), ]
+  print(dim(df_sub))
+  # test one cell group
+  #i = "NPC-div"
+  df.meta_sub <- df.meta[df.meta$Celltype == Celltypes[i], ]
+  print(dim(df.meta_sub))
+  # Prepare the DESeq object
+  dft <- as.data.frame(t(df_sub)) # Transpose the subset dataframe to get genes as rows and samples as columns
+  dfi <- lapply(dft, as.integer)
+  dfi <- as.data.frame(dfi)
+  rownames(dfi) <- rownames(dft)
+  # Create the DESeqDataSet object using the subset dataframe and metadata
+  dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~DiseaseStatus)
+  # Perform DESeq analysis
+  dds <- DESeq(dds)
+  # Store the DESeq results in the list with the cell type as the list index
+  res <- results(dds)
+  list2 <- list()
+  list2[["dds"]] <- dds
+  list2[["results"]] <- res
+  
+  # Initialize an empty list to store the results for each contrast
+  all_results <- list()
+  # Loop through each contrast and calculate the results
+  for (j in 1:(length(all_contrasts) - 1)) {
+    for (k in (j + 1):length(all_contrasts)) {
+      contrast_level1 <- all_contrasts[j]
+      contrast_level2 <- all_contrasts[k]
+      
+      # Check if both levels have at least one sample
+      if (any(dds$DiseaseStatus %in% c(contrast_level1, contrast_level2))) {
+        # Check if contrast levels are different
+        if (contrast_level1 != contrast_level2) {
+          contrast_name <- paste("DiseaseStatus", contrast_level1, "vs", contrast_level2)
+          # Filter rows with complete cases for the current contrast levels
+          complete_cases <- complete.cases(dds$DiseaseStatus, dds$DiseaseStatus %in% c(contrast_level1, contrast_level2))
+          # Subset the DESeq object and calculate the contrast results
+          dds_sub <- dds[complete_cases, ]
+          
+          # Check if both levels still exist in the subset after removing missing values
+          if (contrast_level1 %in% unique(dds_sub$DiseaseStatus) && contrast_level2 %in% unique(dds_sub$DiseaseStatus)) {
+            contrast_result <- results(dds_sub, contrast = c("DiseaseStatus", contrast_level1, contrast_level2), name = contrast_name)
+            all_results[[contrast_name]] <- contrast_result
+          } else {
+            message(paste("Skipping", contrast_name, "due to missing contrast levels in DiseaseStatus."))
+          }
+        } else {
+          message(paste("Skipping", contrast_level1, "vs", contrast_level2, "since they are the same level."))
+        }
+      }
+    }
+  }
+  
+  # Add the contrast results to the list
+  list2[["contrast_results"]] <- all_results
+  
+  # Store the list for the current cell type in the appropriate slot with the cell type name
+  list.results[[Celltypes[i]]] <- list2
+}
+
+
+```
+
+
+
+
+
+```{r}
+# Create an empty list to store the results for each cell type and contrast
+# Create an empty list to store the results for each cell type
+list.results <- list()
+# Loop through each cell type and perform DESeq analysis
+# Create an empty list to store the results for each cell type
+list.results <- vector("list", length(Celltypes))
+
+# Loop through each cell type and perform DESeq analysis
+for (i in seq_along(Celltypes)) {
+  # ... (your previous code to subset and prepare the DESeq object)
+
+  # Initialize an empty list to store the results for each contrast
+  all_results <- list()
+  # Loop through each contrast and calculate the results
+  for (i in 1:(length(all_contrasts) - 1)) {
+    for (j in (i + 1):length(all_contrasts)) {
+      contrast_level1 <- all_contrasts[i]
+      contrast_level2 <- all_contrasts[j]
+
+      # Check if both levels have at least one sample
+      if (any(dds$DiseaseStatus %in% c(contrast_level1, contrast_level2))) {
+        # Check if contrast levels are different
+        if (contrast_level1 != contrast_level2) {
+          contrast_name <- paste("DiseaseStatus", contrast_level1, "vs", contrast_level2)
+          # Filter rows with complete cases for the current contrast levels
+          complete_cases <- complete.cases(dds$DiseaseStatus, dds$DiseaseStatus %in% c(contrast_level1, contrast_level2))
+          # Subset the DESeq object and calculate the contrast results
+          dds_sub <- dds[complete_cases, ]
+
+          # Check if both levels still exist in the subset after removing missing values
+          if (contrast_level1 %in% unique(dds_sub$DiseaseStatus) && contrast_level2 %in% unique(dds_sub$DiseaseStatus)) {
+            contrast_result <- results(dds_sub, contrast = c("DiseaseStatus", contrast_level1, contrast_level2), name = contrast_name)
+            all_results[[contrast_name]] <- contrast_result
+          } else {
+            message(paste("Skipping", contrast_name, "due to missing contrast levels in DiseaseStatus."))
+          }
+        } else {
+          message(paste("Skipping", contrast_level1, "vs", contrast_level2, "since they are the same level."))
+        }
+      }
+    }
+  }
+
+  # Store the DESeq results and objects in the list
+  list.results[[i]] <- list(
+    dds = dds,
+    results = all_results
+  )
+}
+
+
+```
+
+
+Summarize the DGEs
+
+
+```{r}
+summarize_contrast <- function(result) {
+  num_de_genes <- sum(result$padj <= 0.05, na.rm = TRUE)
+  num_downregulated <- sum(result$padj <= 0.05 & result$log2FoldChange < 0, na.rm = TRUE)
+  num_upregulated <- sum(result$padj <= 0.05 & result$log2FoldChange > 0, na.rm = TRUE)
+  
+  return(data.frame(NumGenes = num_de_genes, NumDownregulated = num_downregulated, NumUpregulated = num_upregulated))
+}
+
+# Initialize an empty list to store the summary results for each cell type and contrast
+summary_results_list <- vector("list", length(Celltypes))
+names(summary_results_list) <- Celltypes
+
+# Loop through each cell type and summarize the results for each contrast
+for (i in seq_along(Celltypes)) {
+  # Get the results for the current cell type
+  all_results_celltype <- list.results[[Celltypes[i]]][["contrast_results"]]
+  
+  # Initialize lists to store the summary results for each contrast
+  contrasts <- names(all_results_celltype)
+  num_contrasts <- length(contrasts)
+  celltype_summary <- data.frame(
+    Celltype = rep(Celltypes[i], num_contrasts),
+    Contrast = contrasts,
+    DGE_total = numeric(num_contrasts),
+    DGE_up = numeric(num_contrasts),
+    DGE_down = numeric(num_contrasts)
+  )
+  
+  # Loop through each contrast and summarize the results
+  for (j in seq_along(contrasts)) {
+    contrast_name <- contrasts[j]
+    contrast_result <- all_results_celltype[[contrast_name]]
+    summary_result <- summarize_contrast(contrast_result)
+    
+    # Store the summary results for the current contrast
+    celltype_summary[j, "DGE_total"] <- summary_result$NumGenes
+    celltype_summary[j, "DGE_up"] <- summary_result$NumUpregulated
+    celltype_summary[j, "DGE_down"] <- summary_result$NumDownregulated
+  }
+  
+  # Store the summary results for the current cell type
+  summary_results_list[[Celltypes[i]]] <- celltype_summary
+}
+
+# Combine all the summary results into a single data frame
+summary_table <- do.call(rbind, summary_results_list)
+
+# Print the summary table
+print(summary_table)
+#"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/SumCounts_NPC_from48sample.csv"
+write.csv(summary_table,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/DGE_summary_counts_NPCcultures.csv")
+saveRDS(list.results, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/DGE_NPCculturesList.RDS")
+
+```
+
+
+```{r}
+
+res.NPC <- as.data.frame(list.results[["NPC-div"]][["contrast_results"]][["DiseaseStatus HC vs PD"]])
+
+head(res.NPC)
+
+```
+
+```{r, fig.height=3}
+library(EnhancedVolcano)
+EnhancedVolcano(res.NPC,
+    lab = rownames(res.NPC),
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    #ylim = c(0,20),
+    #xlim = c(-2,2),
+    pCutoff = 0.001,
+    FCcutoff = 1,
+    pointSize = 5.0,
+    labSize = 5, 
+    #legendLabSize = 20,
+    #subtitleLabSize = 20,
+    #legendIconSize = 10,
+    ) 
+```
+
+

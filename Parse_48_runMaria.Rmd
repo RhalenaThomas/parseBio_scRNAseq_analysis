@@ -1,0 +1,303 @@
+```{r}
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(ggplot2)
+
+rm(list = ls())
+
+install.packages("BiocManager")
+
+BiocManager::install("clusterProfiler")
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("AnnotationDbi")
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("org.Hs.eg.db")
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+```
+```{r}
+SaveFigure <- function(plots, name, type = "png", width, height, res){
+  if(type == "png") {
+    png(paste0(fig_path, name, ".", type),
+      width = width, height = height, units = "in", res = 200)
+  } else {
+    pdf(paste0(fig_path, name, ".", type),
+      width = width, height = height)
+}
+print(plots)
+dev.off()
+}
+
+SaveObject <- function(object, name){
+  saveRDS(object, paste0(data_path, name, ".RDS"))
+}
+
+ReadObject <- function(name){
+  readRDS(paste0(data_path, name, ".RDS"))
+}
+```
+
+```{r}
+mat_path <- "/Users/tgolds3/Documents/scRNA_seq/DGE_filtered"
+mat <- ReadParseBio(mat_path)
+```
+
+```{r}
+table(rownames(mat) == "")
+rownames(mat)[rownames(mat) == ""] <- "unknown"
+```
+
+```{r}
+cell_meta <- read.csv(paste0(mat_path, "/cell_metadata.csv"), row.names = 1)
+```
+
+```{r}
+data48 <- CreateSeuratObject(mat, min_genes = 250, min_cells = 10,
+names.feild = 0, meta.data = cell_meta)
+```
+
+```{r}
+data48@meta.data$orig.ident <- factor(rep("data48", nrow(data48@meta.data)))
+Idents(data48) <- data48@meta.data$orig.ident
+
+SaveObject(data48, "seurat_obj_before_QC")
+data48 <- ReadObject("seurat_obj_before_QC")
+```
+```{r}
+data48[["percent.mt"]] <- PercentageFeatureSet(data48, pattern = "^MT-")
+plot <- VlnPlot(data48, pt.size = 0.10, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+#SaveFigure(plot, "vln_QC", width = 12, height = 6)
+
+plot1 <- FeatureScatter(data48, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(data48, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+# SaveFigure((plot1 + plot2),"scatter_QC", width = 12, height = 6, res = 200)
+plot
+plot1
+plot2
+```
+
+```{r}
+VlnPlot(data48, pt.size = 0.010, features = "nFeature_RNA", group.by = 'sample')
+VlnPlot(data48, pt.size = 0.010, features = "nFeature_RNA", group.by = 'sample', y.max = 1000)
+
+VlnPlot(data48, pt.size = 0.0010, features = "nCount_RNA", group.by = 'sample',y.max = 50000)
+```
+
+```{r}
+data48 <- subset(data48, subset = nFeature_RNA < 12000 &  nFeature_RNA >300 & nCount_RNA < 30000 & percent.mt < 15)
+```
+
+```{r}
+table(data48$sample)
+```
+
+```{r}
+data48 <- NormalizeData(data48, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+```{r}
+data48 <- FindVariableFeatures(data48, selection.method = "vst", nfeatures = 2500)
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(data48), 10)
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(data48)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+#SaveFigure((plot1 + plot2), "var_features", width = 12, height = 6)
+plot1
+plot2
+```
+
+```{r}
+data48 <- ScaleData(data48)
+```
+
+```{r}
+data48 <- RunPCA(data48)
+
+# Examine and visualize PCA results a few different ways
+print(data48[["pca"]], dims = 1:5, nfeatures = 5)
+```
+
+```{r}
+plot <- VizDimLoadings(data48, dims = 1:2, reduction = "pca")
+#SaveFigure(plot, "viz_PCA_loadings", width = 10, height = 8)
+plot
+```
+
+```{r}
+plot <- DimPlot(data48, reduction = "pca", group.by = "orig.ident")
+#SaveFigure(plot, "pc1_2_scatter", width = 8, height = 6)
+plot
+```
+
+```{r}
+plot <- DimHeatmap(data48, dims = 1, cells = 500, balanced = TRUE, fast = FALSE)
+#SaveFigure(plot, "dim_heatmap1", width = 8, height = 6)
+plot
+```
+
+```{r}
+plot <- DimHeatmap(data48, dims = 1:15, cells = 500, balanced = TRUE, fast = FALSE)
+```
+```{r}
+plot <- ElbowPlot(data48,ndims = 50)
+plot
+```
+
+```{r}
+data48 <- FindNeighbors(data48, dims = 1:30)
+data48 <- FindClusters(data48, resolution = 0.30)
+```
+
+```{r}
+data48 <- BuildClusterTree(data48, reorder = TRUE, reorder.numeric = TRUE)
+```
+
+```{r}
+data48 <- RunUMAP(data48, dims = 1:30)
+plot <- DimPlot(data48, reduction = "umap")
+plot
+```
+
+```{r}
+DimPlot(data48, reduction = "umap", group.by = "sample")
+```
+
+```{r}
+mar <- FindAllMarkers(data48, min.pct = 0.25, logfc.threshold = 0.25)
+mar %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
+
+mar
+```
+
+
+```{r}
+write.csv(mar, "/Users/tgolds3/Documents/scRNA_seq/MarkersforClusters.csv")
+```
+
+```{r}
+top5 <- mar %>% group_by(cluster)
+to_plot <- unique(top5$gene)
+plot <- DotPlot(data48, features = to_plot, group.by = "tree.ident")
+#SaveFigure(plot, "dplot_top5", width = 9, height = 20)
+plot
+```
+
+```{r}
+saveRDS(data48,"/Users/tgolds3/Documents/scRNA_seq/Parse48_analysis.RDS")
+```
+```{r}
+genes_to_test <- rownames(mar[mar$log2FoldChange > 0.5])
+genes_to_test
+```
+```{r}
+GO_results <- enrichGO(gene = genes_to_test, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ont = "BP")
+as.data.frame(GO_results)
+```
+
+```{r}
+write.csv(GO_results, "/Users/tgolds3/Documents/scRNA_seq/GO_Biological_Processes.csv", row.names=FALSE)
+```
+
+```{r}
+fit <- plot(barplot(GO_results, showCategory = 10))
+```
+Elia said this is how you can subset data! 
+sdata <- subset(data48, sample %in% c("M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"))
+This was run in the terminal, so if I want to do it in the block need to run it alone in a code block thing. 
+
+Now Running all steps above for analysis on maria's samples
+```{r}
+sdata <- FindNeighbors(sdata, dims = 1:30)
+sdata <- FindClusters(sdata, resolution = 0.30)
+
+sdata <- BuildClusterTree(sdata, reorder = TRUE, reorder.numeric = TRUE)
+```
+
+
+```{r}
+sdata <- RunUMAP(sdata, dims = 1:30)
+plot_maria_umap <- DimPlot(sdata, reduction = "umap")
+plot_maria_umap
+
+DimPlot(sdata, reduction = "umap", group.by = "sample")
+
+mm <- FindAllMarkers(sdata, min.pct = 0.25, logfc.threshold = 0.25)
+
+mm %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
+
+mm
+
+write.csv(mm, "/Users/tgolds3/Documents/scRNA_seq/Maria_MarkersforClusters.csv")
+
+top5m <- mm %>% group_by(cluster)
+to_plotm <- unique(top5m$gene)
+plot_m <- DotPlot(sdata, features = to_plotm, group.by = "tree.ident")
+#SaveFigure(plot, "dplot_top5", width = 9, height = 20)
+plot_m
+
+genes_to_test_maria <- rownames(mm[mm$log2FoldChange > 0.5])
+genes_to_test_maria
+
+GO_results_maria <- enrichGO(gene = genes_to_test_maria, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ont = "BP")
+as.data.frame(GO_results_maria)
+
+write.csv(GO_results_maria, "/Users/tgolds3/Documents/scRNA_seq/Maria_GO_Biological_Processes.csv", row.names=FALSE)
+
+fitm <- plot(barplot(GO_results_maria, showCategory = 10))
+
+
+
+
+
+```
+
+```{r}
+function(fitm, MariaGO, type = "png", width, height, res){
+    if(type == "png") {
+        png(paste0("Users/tgolds3/Documents/scRNA_seq", MariaGO, ".", type),
+            width = 5, height = 8, units = "in", res = 300)
+    } else {
+        pdf(paste0(fig_path, name, ".", type),
+            width = width, height = height)
+    }
+    print(fitm)
+    dev.off()
+}
+```
+# print GO
+
+pdf("MariaGo.pdf")
+print(fitm)
+dev.off()
+
+
+Got some more graphs for Maria and fixed an issue
+DimPlot(sdata, reduction = "umap")
+> plot_maria_umap
+> plot_maria_umap <- DimPlot(sdata, reduction = "umap")
+> plot_maria_umap
+> pdf("Maria_umap.pdf")
+> print(plot_maria_umap)
+> dev.off()
+RStudioGD 
+        2 
+> DimPlot(sdata, reduction = "umap", group.by = "sample")
+> sampleumapmaria <- DimPlot(sdata, reduction = "umap", group.by = "sample")
+> pdf("UMAP_Sample_Maria.pdf")
+> print(sampleumapmaria)
+> dev.off()
+RStudioGD 
+        2 
+> pdf("All_UMAP_Maria.pdf")
+> print(plot_maria_umap)
+> print(sampleumapmaria)
+> dev.off()
+RStudioGD 
+        2 
+> View(sdata)

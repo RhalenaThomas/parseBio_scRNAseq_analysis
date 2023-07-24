@@ -1,0 +1,82 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+48 sample - remove Pools and Maria's samples
+Separated the NPCs and Neurons
+For each culture type integrated the lines, first integrated all the lines within a diseasestatus and then integrated the 3 groups. 
+
+For NPCs, clustered and annotated.
+
+
+```{r}
+library(Seurat)
+library(tidyverse)
+```
+
+Read in the NPC data
+
+```{r}
+
+seu <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesintegratedNPCs.RDS")
+
+
+```
+
+Calculate DGE using scRNAseq methods in seurat
+
+```{r}
+# subset the cell type to test
+Idents(seu) <- "Celltypes3"
+NPC.div <- subset(seu, idents = "NPC-div")
+dim(seu)
+dim(NPC.div)
+
+DefaultAssay(NPC.div) <- "RNA"
+NPC.div <- ScaleData(NPC.div)
+Idents(NPC.div) <- "DiseaseStatus"
+DGE <- FindMarkers(NPC.div, test.use = "MAST", ident.1 = "PD",ident.2 = "HC", logfc.threshold = 0.01)
+
+
+```
+```{r}
+head(DGE)
+```
+
+
+
+Volcano plot
+
+```{r, fig.height=5}
+#library(EnhancedVolcano)
+vplot <- EnhancedVolcano(DGE,
+    lab = rownames(DGE),
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    #ylim = c(0,20),
+    xlim = c(-2,2),
+    pCutoff = 0.01,
+    FCcutoff = 0.25,
+    pointSize = 5.0,
+    labSize = 5, 
+    #legendLabSize = 20,
+    #subtitleLabSize = 20,
+    #legendIconSize = 10,
+    ) 
+
+vplot
+```
+
+
+
+NPC-div
+```{r}
+sc.up <- DGE %>% filter(avg_log2FC >= 0 & p_val_adj <= 0.001)
+sc.down <- DGE %>% filter(avg_log2FC < 0 & p_val_adj <= 0.001)
+sc.all <- DGE %>% filter(p_val_adj <= 0.001)
+
+
+```
+
+

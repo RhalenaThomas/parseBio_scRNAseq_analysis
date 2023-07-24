@@ -9,7 +9,7 @@ Load libraries
 ```{r}
 library(Seurat)
 library(tidyverse)
-library(CelltypeR)
+#library(CelltypeR)
 
 ```
 
@@ -208,7 +208,7 @@ DimPlot(integrated_seurat, group.by = 'IPSC_Line')
 ```
 
 ```{r}
-# saveRDS(integrated_seurat, "Integrated12samples.RDS")
+saveRDS(integrated_seurat, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/Integrated12samples.RDS")
 # setwd("~/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12")
 integrated_seurat <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/Integrated12samples.RDS")
 
@@ -464,6 +464,224 @@ DimPlot(seu_sub, group.by = "DiseaseStatus")
 
 
 ```
+```{r}
+table(seu_sub$DiseaseStatus)
+```
+
+
+Neurons DGE volcano plot
+
+```{r, fig.height= 3}
+
+library(EnhancedVolcano)
+EnhancedVolcano(DGE,
+    lab = rownames(DGE),
+    #xlim = c(-0.25,0.25),
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    pCutoff = 0.000001,
+    FCcutoff = 1,
+    pointSize = 3.0,
+    labSize = 6.0)
+
+
+
+```
+
+```{r}
+ft <- c("MGAT4C","TBR1","SLC4A10","RELN","PTPRD",
+        "GPC5","SIM1","ONECUT2","EBF1","LMX1A")
+
+DotPlot(seu_sub, features = ft) +RotatedAxis()
+
+head(DGE)
+# filter for significant pvalues
+DGE.ft <- DGE %>% filter(p_val_adj <= 0.01)
+up <- DGE.ft %>% filter(avg_log2FC > 0.1)
+down <- DGE.ft %>% filter(avg_log2FC < -0.1)
+
+
+```
+
+DGE in NPCs: NPC-div
+
+```{r}
+DefaultAssay(integrated_seurat) <- "RNA"
+Idents(integrated_seurat) <- "Celltypes3"
+levels(integrated_seurat)
+seu_sub <- subset(integrated_seurat, idents = "NPC-div")
+dim(seu_sub)
+table(seu_sub$IPSC_Line)
+table(seu_sub$DiseaseStatus)
+seu_sub <- ScaleData(seu_sub)
+seu_sub <- NormalizeData(seu_sub)
+
+Idents(seu_sub) <- "DiseaseStatus"
+levels(seu_sub)
+DGE <- FindMarkers(seu_sub, ident.1 = "PD", ident.2 = "Con")
+DimPlot(seu_sub, group.by = "DiseaseStatus")
+
+
+```
+
+```{r, fig.height=3}
+EnhancedVolcano(DGE,
+    lab = rownames(DGE),
+    #xlim = c(-0.25,0.25),
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    pCutoff = 0.000001,
+    FCcutoff = 1,
+    pointSize = 3.0,
+    labSize = 6.0)
+```
+```{r}
+ft <- c("TEME132C","TMEM132D","GPC3","NRG1","PDE1A",
+        "TTC6","SPON1","NTN1","PK1B","BNC2")
+
+DotPlot(seu_sub, features = ft) +RotatedAxis()
+
+#head(DGE)
+# filter for significant pvalues
+DGE.ft <- DGE %>% filter(p_val_adj <= 0.01)
+dim(DGE.ft)
+up <- DGE.ft %>% filter(avg_log2FC > 0.1)
+dim(up)
+down <- DGE.ft %>% filter(avg_log2FC < -0.1)
+dim(down)
+```
+
+```{r}
+
+# main NPC group
+DefaultAssay(integrated_seurat) <- "RNA"
+Idents(integrated_seurat) <- "Celltypes3"
+levels(integrated_seurat)
+seu_sub <- subset(integrated_seurat, idents = "NPC")
+dim(seu_sub)
+table(seu_sub$IPSC_Line)
+table(seu_sub$DiseaseStatus)
+#seu_sub <- ScaleData(seu_sub)
+seu_sub <- NormalizeData(seu_sub)
+
+Idents(seu_sub) <- "DiseaseStatus"
+levels(seu_sub)
+DGE <- FindMarkers(seu_sub, ident.1 = "PD", ident.2 = "Con")
+DimPlot(seu_sub, group.by = "DiseaseStatus")
+
+```
+```{r, fig.height=3}
+library(EnhancedVolcano)
+EnhancedVolcano(DGE,
+    lab = rownames(DGE),
+    xlim = c(-3,3),
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    pCutoff = 0.01,
+    FCcutoff = 1,
+    pointSize = 3.0,
+    labSize = 6.0)
+
+```
+
+```{r}
+
+ft <- c("RBFOX1","TMEM132C","GPC3","NRG1","LINGO2",
+        "TTC6","SLIT1","CHN2","NTN1","ALK")
+
+DotPlot(seu_sub, features = ft) +RotatedAxis()
+
+#head(DGE)
+# filter for significant pvalues
+DGE.ft <- DGE %>% filter(p_val_adj <= 0.01)
+dim(DGE.ft)
+up <- DGE.ft %>% filter(avg_log2FC > 0.1)
+dim(up)
+down <- DGE.ft %>% filter(avg_log2FC < -0.1)
+dim(down)
+```
+
+From the pseudo bulk
+```{r}
+ft <- c("CLRN1","NR2E1","IFI44","DMRT3","FEZF2",
+        "KCNJ16","RGPD2","CORIN","GALR1","SIM1")
+
+DotPlot(seu_sub, features = ft) +RotatedAxis()
+```
+
+
+```{r}
+
+library(enrichR)
+setEnrichrSite("Enrichr") # Human genes
+# list of all the databases
+# get the possible libraries
+dbs <- listEnrichrDbs()
+
+# this will list the possible libraries
+dbs
+
+# select libraries with cell types
+db <- c('KEGG_2019_Human','GWAS_Catalog_2019',"GO_Biological_Process_2023",
+        "GO_Cellular_Component_2023","GO_Molecular_Function_2023")
+
+# use only the significant after p adjusted genes
+# add genes column to DGE it is X if saved to csv
+DGE.ft$X <- rownames(DGE.ft)
+
+# function for a quick look
+getGSA <- function(dataframe, up_or_down = "up", LFCthresh = 0.01,
+                          pval_thresh = 0.05){
+  if(up_or_down == "up"){
+      genelist <- dataframe %>% filter(avg_log2FC >= LFCthresh & p_val_adj < pval_thresh)
+  }else if (up_or_down == "down") {
+      genelist <- dataframe %>% filter(avg_log2FC <= LFCthresh & p_val_adj < pval_thresh)
+  } else {
+    genelist <- dataframe %>% filter(p_val_adj < pval_thresh)
+  }
+genes <- genelist$X
+  # the cell type libraries
+  # get the results for each library
+  results <- enrichr(genes, databases = db)
+  # visualize the results
+  
+print(plotEnrich(results[[1]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'KEGG'))
+print(plotEnrich(results[[2]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GWAS'))
+print(plotEnrich(results[[3]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GObio'))
+print(plotEnrich(results[[4]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GOcell'))
+print(plotEnrich(results[[5]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GOmol'))
+return(results)
+}
+
+DGEup <- getGSA(DGE.ft, up_or_down = "up",
+                LFCthresh = 0.02,
+                pval_thresh = 0.05)
+
+
+```
+
+```{r}
+DGEdown <- getGSA(DGE.ft, up_or_down = "down",
+                LFCthresh = -0.02,
+                pval_thresh = 0.05)
+```
+
+```{r}
+DGEboth <- getGSA(DGE.ft, up_or_down = "both",
+                LFCthresh = 0,
+                pval_thresh = 0.01)
+
+```
+
+The DGE.ft to compare to with the pseudobulk results
+
+```{r}
+# write the DGE
+write.csv(DGE.ft, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/DGEseuratNPCs.csv")
+
+
+```
+
 
 
 Create a sum of counts data table 
@@ -471,8 +689,6 @@ Create a sum of counts data table
 ```{r}
 sum_counts <- AggregateExpression(integrated_seurat, assay = "RNA", group.by = "sample", add.ident = "sample")
 # this seems to group by the group and the active ident together
-
-
 
 colnames(integrated_seurat@meta.data)
 dim(sum_counts$RNA)
@@ -505,6 +721,30 @@ dim(sum_counts_df)
 
 write.csv(sum_counts_df, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/SumCounts_Integrated_allCelltypes_12samples.csv")
 
+
+```
+
+
+Try to make the MDS plots and the DESeq2 DGE
+
+```{r}
+library( "DESeq2" )
+library(ggplot2)
+
+```
+
+Visualize groups
+
+```{r}
+DimPlot(integrated_seurat, group.by = "Celltypes3", split.by = "Batch")
+DimPlot(integrated_seurat, group.by = "Celltypes3", split.by = "DiseaseStatus")
+DimPlot(integrated_seurat, group.by = "Celltypes3", 
+        split.by = "sample", ncol = 4)
+
+DimPlot(seu_sub, group.by = "DiseaseStatus",
+        split.by = "Batch")
+DimPlot(seu_sub, 
+        split.by = "sample", ncol = 4)
 
 ```
 

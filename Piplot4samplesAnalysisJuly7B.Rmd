@@ -1,0 +1,431 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Pilot data Parse bio 4 iPSC lines NPCs, 3 batches
+
+Load libraries
+```{r}
+library(Seurat)
+library(tidyverse)
+
+```
+
+
+```{r}
+
+# read in the data
+# output from Parse bio pipeline adapted by Saeid
+# run by Taylor
+# data object made by Taylor
+seu <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/Seurat_Parse12sample.RDS")
+
+# this data object has not been filtered
+# it does have PCA and variable features
+seu
+
+```
+```{r}
+
+seu[["percent.mt"]] <- PercentageFeatureSet(seu, pattern = "^MT-")
+Idents(seu) <- 'orig.ident'
+plot <- VlnPlot(seu, pt.size = 0.001, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+plot
+
+Idents(seu) <- 'sample'
+VlnPlot(seu, pt.size = 0.001, features = c("nFeature_RNA"))
+VlnPlot(seu, pt.size = 0.001, features = "nCount_RNA")
+VlnPlot(seu, pt.size = 0.001, features = "percent.mt")
+
+
+
+```
+
+Add in labels for batch and disease status and line
+
+```{r}
+#library("CelltypeR")
+# CelltypeR library is a library I (Rhalena) made for flow cytometry but uses the seurat object and I made a quick add annotations function.
+
+Seurat_Parse12sample <- seu
+
+# here is the function
+annotate <- function(seu, annotations, to_label, annotation_name = "CellType"){
+  Idents(seu) <- to_label
+  names(annotations) <- levels(seu)
+  seu <- RenameIdents(seu, annotations)
+  seu <- AddMetaData(object=seu, metadata=Idents(seu), col.name = annotation_name)
+
+}
+
+Idents(Seurat_Parse12sample) <- "sample"
+sample.levels <- levels(Seurat_Parse12sample)
+# should give the order of sample
+
+# test
+Seurat_Parse12sample <- annotate(Seurat_Parse12sample, annotations = sample.levels, to_label = "sample",annotation_name = "sample.test")
+table(Seurat_Parse12sample$sample.test)
+table(Seurat_Parse12sample$sample)
+# these match
+
+#input vector we got from the seurat object
+# Define regular expression to match first part of the string
+pattern <- "^[A-Za-z]+"
+
+# Use gsub() to replace the first part of the string with an empty string
+sample.levels.new <- gsub(pattern, "", sample.levels)
+
+# Extract B1, B2, B3 from new vector
+batch <- gsub(".*B", "B", sample.levels.new)
+
+Seurat_Parse12sample <- annotate(Seurat_Parse12sample, annotations = batch, to_label = "sample",annotation_name = "Batch")
+
+table(Seurat_Parse12sample$Batch)
+table(Seurat_Parse12sample$Batch,Seurat_Parse12sample$sample)
+
+# add the cell line name
+# sample vector is still the input vector
+# Define regular expression to remove B1, B2, and B3
+pattern <- "B[1-3]$"
+
+# Use gsub() to remove B1, B2, and B3 from original vector
+sample.levels.new <- gsub(pattern, "", sample.levels)
+
+# Extract starting values from new vector
+ipscline <- gsub("B[1-3]$", "", sample.levels.new)
+ipscline
+
+Seurat_Parse12sample <- annotate(Seurat_Parse12sample, annotations = ipscline, to_label = "sample",annotation_name = "IPSC_Line")
+
+table(Seurat_Parse12sample$IPSC_Line)
+table(Seurat_Parse12sample$IPSC_Line,Seurat_Parse12sample$sample)
+
+# add disease status
+# we need to know the order of the lines
+
+Idents(Seurat_Parse12sample) <- "IPSC_Line"
+line.levels <- levels(Seurat_Parse12sample)
+line.levels
+
+PDstatus <- c("PD","PD","Con","Con")  # if TD07 and 2965 are PD lines and TD22 and 3448 are control lines
+Seurat_Parse12sample <- annotate(Seurat_Parse12sample, annotations = PDstatus, to_label = "IPSC_Line",annotation_name = "DiseaseStatus")
+
+table(Seurat_Parse12sample$DiseaseStatus)
+
+ 
+table(Seurat_Parse12sample$DiseaseStatus,Seurat_Parse12sample$IPSC_Line)
+
+table(Seurat_Parse12sample$Batch,Seurat_Parse12sample$IPSC_Line)
+
+
+
+
+```
+
+
+Save info 
+```{r}
+saveRDS(Seurat_Parse12sample, "Parse12sample4lines3batchJuly7.RDS")
+
+seu <- Seurat_Parse12sample
+rm(Seurat_Parse12sample)
+
+# plots of in a different workbook for the pre aligned data
+
+
+```
+
+Align the cell lines and batches, we will align across the 12 samples
+
+```{r}
+# make a list of seurat objects by our cell type variable
+sublist <- SplitObject(seu, split.by = "sample")
+# normalize and find variable features
+for (i in 1:length(sublist)){
+  sublist[[i]] <- NormalizeData(sublist[[i]], verbose = FALSE)
+  sublist[[i]] <- FindVariableFeatures(sublist[[i]], selection.method = "vst")
+}
+# Create an empty Seurat object to store the integrated data
+# Take the first Seurat object from the list as the starting point
+integrated_seurat <- subset(sublist[[1]])
+
+
+# Iterate over the list of Seurat objects
+for (i in 1:length(sublist)) {
+  # Rename the 'orig.ident' metadata inside the seurat object to match the object name in the list
+  sublist[[i]]$orig.ident <- names(sublist)[i]
+
+}
+
+sample.list <- sublist
+for (i in 1:length(sample.list)) {
+  # Normalize and scale the data
+  sample.list[[i]] <- NormalizeData(sample.list[[i]], verbose = FALSE)
+  sample.list[[i]] <- ScaleData(sample.list[[i]], verbose = FALSE)
+  # Find variable features
+  sample.list[[i]] <- FindVariableFeatures(sample.list[[i]], selection.method = "vst")
+  # Get the variable features
+  variable_features <- VariableFeatures(sample.list[[i]])
+  # Run PCA with the variable features
+  sample.list[[i]] <- RunPCA(sample.list[[i]], verbose = FALSE, npcs = 30, features = variable_features)
+}
+
+int.anchors <- FindIntegrationAnchors(object.list = sample.list, dims = 1:30, reduction = "rpca")
+integrated_seurat <- IntegrateData(anchorset = int.anchors,  dims = 1:30)
+# 
+# must set the k weight to the lowest cell count 
+# in the parse sample we have over 1530 cells in the smallest count so we don't have to change the k from the 100 default
+
+
+
+
+```
+
+
+Now we need to run the workflow on the integrated object
+
+```{r}
+DefaultAssay(integrated_seurat) <- "integrated"
+integrated_seurat <- ScaleData(integrated_seurat, verbose = FALSE)
+# only the integrated features will be the pca input
+
+integrated_seurat <- RunPCA(integrated_seurat, npcs = 20, verbose = FALSE)
+integrated_seurat <- RunUMAP(integrated_seurat, reduction = "pca", dims = 1:20, n.neighbors = 81)
+
+```
+
+Have a look at the new UMAP
+
+```{r}
+DimPlot(integrated_seurat, group.by = 'sample')
+DimPlot(integrated_seurat, group.by = 'Batch')
+DimPlot(integrated_seurat, group.by = 'DiseaseStatus')
+DimPlot(integrated_seurat, group.by = 'IPSC_Line')
+
+
+
+```
+
+```{r}
+saveRDS(integrated_seurat, "Integrated12samples.RDS")
+seu <- readRDS("Integrated12samples.RDS")
+
+```
+
+Find new clusters
+
+```{r}
+DefaultAssay(integrated_seurat) <- "integrated"
+integrated_seurat <- FindNeighbors(integrated_seurat, dims = 1:20, k.param = 81)
+integrated_seurat <- FindClusters(integrated_seurat, resolution = c(0,0.3,0.6,1) )
+
+```
+
+```{r}
+library(clustree)
+clustree(integrated_seurat)
+
+
+```
+
+```{r}
+
+DimPlot(integrated_seurat, group.by = "integrated_snn_res.0.3")
+DimPlot(integrated_seurat, group.by = "integrated_snn_res.0.6")
+
+```
+
+Annotate clusters res 0.3
+
+```{r}
+
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+ClusterMarkers <- FindAllMarkers(integrated_seurat, only.pos = TRUE)
+
+```
+
+
+
+```{r}
+library(enrichR)
+setEnrichrSite("Enrichr") # Human genes
+# list of all the databases
+# get the possible libraries
+dbs <- listEnrichrDbs()
+
+# this will list the possible libraries
+dbs
+
+# select libraries with cell types
+db <- c('CellMarker_Augmented_2021','Azimuth_Cell_Types_2021')
+
+# function for a quick look
+checkCelltypes <- function(cluster_num = 0){
+  clusterX <- ClusterMarkers %>% filter(cluster == cluster_num & avg_log2FC > 0.25)
+  genes <- clusterX$gene
+  # the cell type libraries
+  # get the results for each library
+  clusterX.cell <- enrichr(genes, databases = db)
+  # visualize the results
+print(plotEnrich(clusterX.cell[[1]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'CellMarker_Augmented_2021'))
+print(plotEnrich(clusterX.cell[[2]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'Azimuth_Cell_Types_2021'))
+
+}
+
+```
+Check each cluster quickly
+
+```{r}
+checkCelltypes(cluster_num = 9)
+
+```
+
+Look at some expression lists
+
+```{r}
+
+da_neurons <- c("TH","SLC6A3","SLC18A2","SOX6","NDNF","SNCG","ALDH1A1","CALB1","TACR2","SLC17A6","SLC32A1","OTX2","GRP","LPL","CCK","VIP")
+NPC_orStemLike <- c("DCX","NEUROD1","TBR1","PCNA","MKI67","SOX2","NES","PAX6","MASH1")
+mature_neurons = c("RBFOX3","SYP","DLG45","VAMP1","VAMP2","TUBB3","SYT1","BSN","HOMER1","SLC17A6")
+excitatory_neurons = c("GRIA2","GRIA1","GRIA4","GRIN1","GRIN2B","GRIN2A","GRIN3A","GRIN3","GRIP1","CAMK2A")
+inhbitory_neurons = inh = c("GAD1","GAD2", "GAT1","PVALB","GABR2","GABR1","GBRR1","GABRB2","GABRB1","GABRB3","GABRA6","GABRA1","GABRA4","TRAK2")
+astrocytes <- c("GFAP","S100B","AQP4","APOE", "SOX9","SLC1A3")
+oligodendrocytes <- c("MBP","MOG","OLIG1","OLIG2","SOX10")
+opc <- 
+radial_glia <- c("PTPRC","AIF1","ADGRE1", "VIM", "TNC","PTPRZ1","FAM107A","HOPX","LIFR",
+              "ITGB5","IL6ST","SLC1A3")
+epithelial <- c("HES1","HES5","SOX2","SOX10","NES","CDH1","NOTCH1")
+
+microglia <- c("IBA1","P2RY12","P2RY13","TREM119", "GPR34","SIGLECH","TREM2",
+               "CX3CR1","FCRLS","OLFML3","HEXB","TGFBR1", "SALL1","MERTK",
+               "PROS1")
+
+features_list <- c("MKI67","SOX2","POU5F1","DLX2","PAX6","SOX9","HES1","NES","RBFOX3","MAP2","NCAM1","CD24","GRIA2","GRIN2B","GABBR1","GAD1","GAD2","GABRA1","GABRB2","TH","ALDH1A1","LMX1B","NR4A2","CORIN","CALB1","KCNJ6","CXCR4","ITGA6","SLC1A3","CD44","AQP4","S100B", "PDGFRA","OLIG2","MBP","CLDN11","VIM","VCAM1")
+
+short_list <- c("MKI67","SOX9","HES1","NES","DLX2","RBFOX3","MAP2","TH","CALB1","KCNJ6","SLC1A3","CD44","AQP4","S100B","OLIG2","MBP","VIM")
+
+```
+
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in da_neurons) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+```
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in NPC_orStemLike) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+```
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in astrocytes) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+```
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in radial_glia) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+```
+
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in mature_neurons) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+
+```
+
+```{r}
+
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in excitatory_neurons) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+
+```
+Add annotations - first pass
+NPC-stem
+NPC-glia
+NPC-SOX6
+Neurons-Glut
+Progenitors-div
+NPC-SOX2-OXT-fibro
+Neural-Stem
+stem cell
+Neuron-GABA
+Neuron-epithelial
+
+```{r}
+celltypes1 <- c("NPC-stem","NPC-glia","NPC-SOX6","Neurons-Glut","Progenitors-div",
+                "NPC-fibro","Neural-Stem","Stem","Neurons-GABA","Neural-epi")  
+integrated_seurat <- annotate(integrated_seurat, annotations = celltypes1, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes1")
+
+DimPlot(integrated_seurat, label = TRUE)
+
+```
+
+```{r}
+
+celltypes2 <- c("NPC","NPC","NPC","Neurons","Progenitors",
+                "NPC","NPC","Stem","Neurons","Epithelial")  
+integrated_seurat <- annotate(integrated_seurat, annotations = celltypes2, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes2")
+
+DimPlot(integrated_seurat, label = TRUE)
+
+```
+
+```{r}
+
+
+DimPlot(integrated_seurat, split.by = "DiseaseStatus")
+DimPlot(integrated_seurat, split.by = "DiseaseStatus", group.by = "Celltypes1")
+
+
+```
+
+```{r}
+celltypes3 <- c("NPC","NPC","NPC","Neurons","NPC-div",
+                "Neuro-NPC","Neural-Stem","Stem","Neurons","Neural-epi")  
+integrated_seurat <- annotate(integrated_seurat, annotations = celltypes3, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes3")
+
+DimPlot(integrated_seurat, label = TRUE)
+```
+
+DEG in cell types 3 groups
+
+```{r}
+Idents(integrated_seurat) <- "Celltypes3"
+seu_sub <- subset(integrated_seurat, idents = "Neurons")
+seu_sub <- ScaleData(seu_sub)
+seu_sub <- NormalizeData(seu_sub)
+
+DimPlot(seu_sub, group.by = "DiseaseStatus")
+
+
+```
+
+
+
+
+
+

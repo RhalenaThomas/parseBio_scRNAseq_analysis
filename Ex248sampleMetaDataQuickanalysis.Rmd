@@ -1,0 +1,345 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(tidyverse)
+#library(CelltypeR)
+```
+
+
+
+```{r}
+seu <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/Parse48_analysisMaria.RDS")
+
+unique(seu$sample)
+
+Idents(seu) <- "sample"
+levels(seu)
+
+samples <- levels(seu)
+samples
+
+```
+
+Add meta data information
+
+```{r}
+# using celltypeR function
+
+# add the culture type NPC, DA neurons 2weeks, Motor neurons
+new_vector <- ifelse(grepl("NPC", samples), "NPC",
+                     ifelse(grepl("Final", samples), "Neurons2weeks",
+                            ifelse(grepl("^M", samples), "MotorNeurons", "Other")))
+
+# Print the new vector
+print(new_vector)
+
+seu <- annotate(seu, annotations = new_vector, to_label = "sample",annotation_name = "CultureType")
+
+DimPlot(seu)
+
+# check with sample names
+
+table(seu$sample, seu$CultureType)
+
+
+```
+
+Add the lines and then the diseases status
+
+```{r}
+
+  # Create a new vector with line names
+new_line_vector <- gsub("^(NPC|Final)", "", samples)
+new_line_vector <- gsub("3123$", "3123-iso", new_line_vector)
+new_line_vector[new_line_vector == "P65P"] <- "3123-isoP65P"
+new_line_vector[new_line_vector == "Q65Q"] <- "3123-isoQ65Q"
+
+# Print the new vector with line names
+
+
+new_line_vector[new_line_vector == "2AIW002-02"] <- "AIW002-02"
+
+print(new_line_vector)
+
+seu <- annotate(seu, annotations = new_line_vector, to_label = "sample",annotation_name = "Line")
+
+
+# check
+table(seu$sample, seu$Line)
+
+```
+```{r, fig.width=6}
+DimPlot(seu)
+```
+
+
+```{r}
+# add disease status
+
+# Create the lookup table for Line to DiseaseStatus mapping
+line_to_disease <- c("3448" = "HC",
+                     "TD22" = "HC",
+                     "AIW001-02" = "HC",
+                     "AIW002-02" = "HC",
+                     "2965" = "PD",
+                     "3383" = "PD",
+                     "3575" = "PD",
+                     "TD06" = "PD",
+                     "TD07" = "PD",
+                     "3123" = "PD",
+                     "3567" = "PD",
+                     "3595" = "PD",
+                     "3940" = "PD",
+                     "3567-iso" = "PD-iso",
+                     "3940R-iso" = "PD-iso",
+                     "TD06-iso" = "PD-iso",
+                     "3940N-iso" = "PD-iso",
+                     "3123-isoQ65Q" = "PD-iso",
+                     "3123-isoP65P" = "PD-iso",
+                     "3123-iso" = "PD-iso",
+                     "3383-iso" = "PD-iso",
+                     "3575-iso" = "PD-iso",
+                     "3595-iso" = "PD-iso")
+
+# Assuming "Line" is your starting character vector
+Idents(seu) <- "Line"
+Line <- levels(seu)
+# Create a new vector of disease statuses using the lookup table
+disease_status_vector <- ifelse(Line %in% names(line_to_disease), 
+                                line_to_disease[Line], 
+                                "other")
+
+# Print the new vector of disease statuses
+print(disease_status_vector)
+
+seu <- annotate(seu, annotations = disease_status_vector, to_label = "Line",annotation_name = "DiseaseStatus")
+
+
+# check
+table(seu$Line, seu$DiseaseStatus)
+
+
+```
+
+```{r}
+cellcounts <- as.data.frame(table(seu$Line,seu$CultureType))
+table(seu$Line,seu$CultureType,seu$DiseaseStatus)
+
+# Convert long_df to the wide format
+wide_df <- pivot_wider(cellcounts, 
+                       id_cols = Var1, 
+                       names_from = Var2, 
+                       values_from = Freq)
+
+write.csv(wide_df,"cellcounts_sample.csv")
+
+```
+
+```{r}
+DimPlot(seu, group.by = "DiseaseStatus")
+
+```
+
+
+
+
+Subset for to remove pools and Maria's samples
+
+```{r}
+unique(seu$sample)
+Idents(seu) <- "DiseaseStatus"
+
+seu.n <- subset(seu, idents = c("HC","PD","PD-iso"))
+dim(seu.n)
+dim(seu)
+
+DimPlot(seu.n)
+
+```
+Reprocess subset
+
+```{r}
+
+seu.n <- RunPCA(seu.n, npcs = 20, verbose = FALSE)
+seu.n <- RunUMAP(seu.n, reduction = "pca", dims = 1:20, n.neighbors = 81)
+DimPlot(seu.n)
+seu.n$CultureType
+DimPlot(seu.n, group.by = "CultureType")
+DimPlot(seu.n, group.by = "Line")
+
+```
+
+```{r}
+seu.n <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamples.RDS")
+  
+```
+
+
+
+Get clusters
+
+```{r}
+seu.n <- NormalizeData(seu.n)
+seu.n <- FindVariableFeatures(seu.n)
+seu.n <- FindNeighbors(seu.n, dims = 1:20, k.param = 81)
+seu.n <- FindClusters(seu.n, resolution = 0.3)
+DimPlot(seu.n, group.by = "RNA_snn_res.0.3")
+#seu.n$RNA_snn_res.0.3
+DimPlot(seu.n, group.by = "CultureType")
+
+```
+
+
+
+
+
+Subset out neurons and NPC
+
+```{r}
+
+#seu.n$CultureType
+Idents(seu.n) <- "CultureType"
+neurons <- subset(seu.n, idents = "Neurons2weeks")
+
+Idents(seu.n) <- "CultureType"
+NPC <- subset(seu.n, idents = "NPC")
+
+```
+
+```{r}
+
+seu <- neurons
+seu <- RunPCA(seu, npcs = 20, verbose = FALSE)
+seu <- RunUMAP(seu, reduction = "pca", dims = 1:20, n.neighbors = 81)
+seu <- FindVariableFeatures(seu)
+seu <- FindNeighbors(seu, dims = 1:20, k.param = 81)
+seu <- FindClusters(seu, resolution = 0.3)
+DimPlot(seu)
+DimPlot(seu, group.by = "CultureType")
+DimPlot(seu, group.by = "Line")
+
+neurons <- seu
+
+```
+
+
+```{r}
+seu <- NPC
+seu <- RunPCA(seu, npcs = 20, verbose = FALSE)
+seu <- RunUMAP(seu, reduction = "pca", dims = 1:20, n.neighbors = 81)
+seu <- FindVariableFeatures(seu)
+seu <- FindNeighbors(seu, dims = 1:20, k.param = 81)
+seu <- FindClusters(seu, resolution = 0.3)
+DimPlot(seu)
+DimPlot(seu, group.by = "CultureType")
+DimPlot(seu, group.by = "Line")
+
+NPC <- seu
+
+DimPlot(NPC, group.by = "DiseaseStatus")
+
+```
+
+
+
+save objects 
+```{r}
+
+saveRDS(seu, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/Parse48_allSamples.RDS")
+
+saveRDS(seu.n, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamples.RDS")
+saveRDS(neurons, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNeurons.RDS")
+saveRDS(NPC, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPC.RDS")
+
+
+NPC <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNPC.RDS")
+
+
+```
+
+```{r}
+table(NPC$Line)
+Idents(NPC) <- "Line"
+levels(NPC)
+table(NPC$DiseaseStatus,NPC$Line)
+
+```
+
+Now integrate samples
+
+```{r}
+
+# All samples is too large to integrate 
+
+table(NPC$Line)
+# subset out the each disease type and then just merge
+Idents(NPC) <- "DiseaseStatus"
+NPC.PD <- subset(NPC, idents = "PD")
+Idents(NPC) <- "DiseaseStatus"
+NPC.PDiso <- subset(NPC, idents = "PD-iso")
+Idents(NPC) <- "DiseaseStatus"
+NPC.HC <- subset(NPC, idents = "HC")
+# make a list of seurat objects by our cell type variable
+sublist <- SplitObject(NPC, split.by = "Line")
+# normalize and find variable features
+for (i in 1:length(sublist)){
+  sublist[[i]] <- NormalizeData(sublist[[i]], verbose = FALSE)
+  sublist[[i]] <- FindVariableFeatures(sublist[[i]], selection.method = "vst")
+}
+# Create an empty Seurat object to store the integrated data
+# Take the first Seurat object from the list as the starting point
+integrated_seurat <- subset(sublist[[1]])
+
+
+# Iterate over the list of Seurat objects
+for (i in 1:length(sublist)) {
+  # Rename the 'orig.ident' metadata inside the seurat object to match the object name in the list
+  sublist[[i]]$orig.ident <- names(sublist)[i]
+
+}
+
+sample.list <- sublist
+for (i in 1:length(sample.list)) {
+  # Normalize and scale the data
+  sample.list[[i]] <- NormalizeData(sample.list[[i]], verbose = FALSE)
+  sample.list[[i]] <- ScaleData(sample.list[[i]], verbose = FALSE)
+  # Find variable features
+  sample.list[[i]] <- FindVariableFeatures(sample.list[[i]], selection.method = "vst")
+  # Get the variable features
+  variable_features <- VariableFeatures(sample.list[[i]])
+  # Run PCA with the variable features
+  sample.list[[i]] <- RunPCA(sample.list[[i]], verbose = FALSE, npcs = 30, features = variable_features)
+}
+
+int.anchors <- FindIntegrationAnchors(object.list = sample.list, dims = 1:30, reduction = "rpca")
+
+# memory limit - save objects to restart
+saveRDS(int.anchors,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/NPCint.ancharors.RDS")
+saveRDS(integrated_seurat,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/NPC_integrate_seurat.RDS")
+
+integrated_seurat <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/NPC_integrate_seurat.RDS")
+int.anchors <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/NPCint.ancharors.RDS")
+
+integrated_seurat <- IntegrateData(anchorset = int.anchors,  dims = 1:15)
+# 
+# must set the k weight to the lowest cell count 
+# in the parse sample we have over 1530 cells in the smallest count so we don't have to change the k from the 100 default
+
+
+```
+
+```{r}
+DimPlot(integrated_seurat)
+
+```
+
+Annotate the NPC clusters
+
+1. Find markers and Check Enricher
+2. Get marker list score and 
+
+

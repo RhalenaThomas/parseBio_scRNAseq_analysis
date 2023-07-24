@@ -1,0 +1,1432 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Pilot data Parse bio 4 iPSC lines NPCs, 3 batches
+
+Load libraries
+```{r}
+library(Seurat)
+library(tidyverse)
+library(CelltypeR)
+
+```
+
+
+```{r}
+
+# read in the data
+# output from Parse bio pipeline adapted by Saeid
+# run by Taylor
+# data object made by Taylor
+seu <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/Seurat_Parse12sample.RDS")
+
+# this data object has not been filtered
+# it does have PCA and variable features
+seu
+
+```
+```{r}
+
+seu[["percent.mt"]] <- PercentageFeatureSet(seu, pattern = "^MT-")
+Idents(seu) <- 'orig.ident'
+plot <- VlnPlot(seu, pt.size = 0.001, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+plot
+
+Idents(seu) <- 'sample'
+VlnPlot(seu, pt.size = 0.001, features = c("nFeature_RNA"))
+VlnPlot(seu, pt.size = 0.001, features = "nCount_RNA")
+VlnPlot(seu, pt.size = 0.001, features = "percent.mt")
+
+
+
+```
+
+Add in labels for batch and disease status and line
+
+```{r}
+#library("CelltypeR")
+# CelltypeR library is a library I (Rhalena) made for flow cytometry but uses the seurat object and I made a quick add annotations function.
+
+Seurat_Parse12sample <- seu
+
+# here is the function
+annotate <- function(seu, annotations, to_label, annotation_name = "CellType"){
+  Idents(seu) <- to_label
+  names(annotations) <- levels(seu)
+  seu <- RenameIdents(seu, annotations)
+  seu <- AddMetaData(object=seu, metadata=Idents(seu), col.name = annotation_name)
+
+}
+
+Idents(Seurat_Parse12sample) <- "sample"
+sample.levels <- levels(Seurat_Parse12sample)
+# should give the order of sample
+
+# test
+Seurat_Parse12sample <- annotate(Seurat_Parse12sample, annotations = sample.levels, to_label = "sample",annotation_name = "sample.test")
+table(Seurat_Parse12sample$sample.test)
+table(Seurat_Parse12sample$sample)
+# these match
+
+#input vector we got from the seurat object
+# Define regular expression to match first part of the string
+pattern <- "^[A-Za-z]+"
+
+# Use gsub() to replace the first part of the string with an empty string
+sample.levels.new <- gsub(pattern, "", sample.levels)
+
+# Extract B1, B2, B3 from new vector
+batch <- gsub(".*B", "B", sample.levels.new)
+
+Seurat_Parse12sample <- annotate(Seurat_Parse12sample, annotations = batch, to_label = "sample",annotation_name = "Batch")
+
+table(Seurat_Parse12sample$Batch)
+table(Seurat_Parse12sample$Batch,Seurat_Parse12sample$sample)
+
+# add the cell line name
+# sample vector is still the input vector
+# Define regular expression to remove B1, B2, and B3
+pattern <- "B[1-3]$"
+
+# Use gsub() to remove B1, B2, and B3 from original vector
+sample.levels.new <- gsub(pattern, "", sample.levels)
+
+# Extract starting values from new vector
+ipscline <- gsub("B[1-3]$", "", sample.levels.new)
+ipscline
+
+Seurat_Parse12sample <- annotate(Seurat_Parse12sample, annotations = ipscline, to_label = "sample",annotation_name = "IPSC_Line")
+
+table(Seurat_Parse12sample$IPSC_Line)
+table(Seurat_Parse12sample$IPSC_Line,Seurat_Parse12sample$sample)
+
+# add disease status
+# we need to know the order of the lines
+
+Idents(Seurat_Parse12sample) <- "IPSC_Line"
+line.levels <- levels(Seurat_Parse12sample)
+line.levels
+
+PDstatus <- c("PD","PD","Con","Con")  # if TD07 and 2965 are PD lines and TD22 and 3448 are control lines
+Seurat_Parse12sample <- annotate(Seurat_Parse12sample, annotations = PDstatus, to_label = "IPSC_Line",annotation_name = "DiseaseStatus")
+
+table(Seurat_Parse12sample$DiseaseStatus)
+
+ 
+table(Seurat_Parse12sample$DiseaseStatus,Seurat_Parse12sample$IPSC_Line)
+
+table(Seurat_Parse12sample$Batch,Seurat_Parse12sample$IPSC_Line)
+
+
+
+
+```
+
+
+Save info 
+```{r}
+saveRDS(Seurat_Parse12sample, "Parse12sample4lines3batchJuly7.RDS")
+
+seu <- Seurat_Parse12sample
+rm(Seurat_Parse12sample)
+
+# plots of in a different workbook for the pre aligned data
+
+```
+
+Align the cell lines and batches, we will align across the 12 samples
+
+```{r}
+# make a list of seurat objects by our cell type variable
+sublist <- SplitObject(seu, split.by = "sample")
+# normalize and find variable features
+for (i in 1:length(sublist)){
+  sublist[[i]] <- NormalizeData(sublist[[i]], verbose = FALSE)
+  sublist[[i]] <- FindVariableFeatures(sublist[[i]], selection.method = "vst")
+}
+# Create an empty Seurat object to store the integrated data
+# Take the first Seurat object from the list as the starting point
+integrated_seurat <- subset(sublist[[1]])
+
+
+# Iterate over the list of Seurat objects
+for (i in 1:length(sublist)) {
+  # Rename the 'orig.ident' metadata inside the seurat object to match the object name in the list
+  sublist[[i]]$orig.ident <- names(sublist)[i]
+
+}
+
+sample.list <- sublist
+for (i in 1:length(sample.list)) {
+  # Normalize and scale the data
+  sample.list[[i]] <- NormalizeData(sample.list[[i]], verbose = FALSE)
+  sample.list[[i]] <- ScaleData(sample.list[[i]], verbose = FALSE)
+  # Find variable features
+  sample.list[[i]] <- FindVariableFeatures(sample.list[[i]], selection.method = "vst")
+  # Get the variable features
+  variable_features <- VariableFeatures(sample.list[[i]])
+  # Run PCA with the variable features
+  sample.list[[i]] <- RunPCA(sample.list[[i]], verbose = FALSE, npcs = 30, features = variable_features)
+}
+
+int.anchors <- FindIntegrationAnchors(object.list = sample.list, dims = 1:30, reduction = "rpca")
+integrated_seurat <- IntegrateData(anchorset = int.anchors,  dims = 1:30)
+# 
+# must set the k weight to the lowest cell count 
+# in the parse sample we have over 1530 cells in the smallest count so we don't have to change the k from the 100 default
+
+
+
+
+```
+
+
+Now we need to run the workflow on the integrated object
+
+```{r}
+DefaultAssay(integrated_seurat) <- "integrated"
+integrated_seurat <- ScaleData(integrated_seurat, verbose = FALSE)
+# only the integrated features will be the pca input
+
+integrated_seurat <- RunPCA(integrated_seurat, npcs = 20, verbose = FALSE)
+integrated_seurat <- RunUMAP(integrated_seurat, reduction = "pca", dims = 1:20, n.neighbors = 81)
+
+```
+
+Have a look at the new UMAP
+
+```{r}
+DimPlot(integrated_seurat, group.by = 'sample')
+DimPlot(integrated_seurat, group.by = 'Batch')
+DimPlot(integrated_seurat, group.by = 'DiseaseStatus')
+DimPlot(integrated_seurat, group.by = 'IPSC_Line')
+
+
+
+```
+
+```{r}
+# saveRDS(integrated_seurat, "Integrated12samples.RDS")
+# setwd("~/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12")
+integrated_seurat <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/Integrated12samples.RDS")
+
+```
+
+Find new clusters
+
+```{r}
+DefaultAssay(integrated_seurat) <- "integrated"
+integrated_seurat <- FindNeighbors(integrated_seurat, dims = 1:20, k.param = 81)
+integrated_seurat <- FindClusters(integrated_seurat, resolution = c(0,0.3,0.6,1) )
+
+```
+
+```{r}
+library(clustree)
+clustree(integrated_seurat)
+
+
+```
+
+```{r}
+
+DimPlot(integrated_seurat, group.by = "integrated_snn_res.0.3")
+DimPlot(integrated_seurat, group.by = "integrated_snn_res.0.6")
+
+```
+```{r}
+DimPlot(integrated_seurat, group.by = "integrated_snn_res.0.3", split.by = "DiseaseStatus")
+
+```
+```{r}
+table(integrated_seurat$DiseaseStatus)
+
+```
+
+
+
+
+Annotate clusters res 0.3
+
+```{r}
+
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+ClusterMarkers <- FindAllMarkers(integrated_seurat, only.pos = TRUE)
+write.csv(ClusterMarkers, "clusterMarkersres03Integrated.csv")
+
+```
+
+
+
+```{r}
+library(enrichR)
+setEnrichrSite("Enrichr") # Human genes
+# list of all the databases
+# get the possible libraries
+dbs <- listEnrichrDbs()
+
+# this will list the possible libraries
+dbs
+
+# select libraries with cell types
+db <- c('CellMarker_Augmented_2021','Azimuth_Cell_Types_2021')
+
+# function for a quick look
+checkCelltypes <- function(cluster_num = 0){
+  clusterX <- ClusterMarkers %>% filter(cluster == cluster_num & avg_log2FC > 0.25)
+  genes <- clusterX$gene
+  # the cell type libraries
+  # get the results for each library
+  clusterX.cell <- enrichr(genes, databases = db)
+  # visualize the results
+print(plotEnrich(clusterX.cell[[1]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'CellMarker_Augmented_2021'))
+print(plotEnrich(clusterX.cell[[2]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'Azimuth_Cell_Types_2021'))
+
+}
+
+```
+```{r}
+#heatmap of top markers
+top3 <- ClusterMarkers %>% group_by(cluster) %>% top_n(n=3, wt =avg_log2FC)
+DoHeatmap(integrated_seurat, features = top3$gene, size = 3, angle = 90, group.by = "integrated_snn_res.0.3")
+
+
+```
+
+```{r}
+table(ClusterMarkers$cluster)
+```
+
+
+
+
+Check each cluster quickly
+
+```{r}
+checkCelltypes(cluster_num = 3)
+
+```
+
+Look at some expression lists
+
+```{r}
+
+da_neurons <- c("TH","SLC6A3","SLC18A2","SOX6","NDNF","SNCG","ALDH1A1","CALB1","TACR2","SLC17A6","SLC32A1","OTX2","GRP","LPL","CCK","VIP")
+NPC_orStemLike <- c("DCX","NEUROD1","TBR1","PCNA","MKI67","SOX2","NES","PAX6","MASH1")
+mature_neurons = c("RBFOX3","SYP","DLG45","VAMP1","VAMP2","TUBB3","SYT1","BSN","HOMER1","SLC17A6")
+excitatory_neurons = c("GRIA2","GRIA1","GRIA4","GRIN1","GRIN2B","GRIN2A","GRIN3A","GRIN3","GRIP1","CAMK2A")
+inhbitory_neurons = inh = c("GAD1","GAD2", "GAT1","PVALB","GABR2","GABR1","GBRR1","GABRB2","GABRB1","GABRB3","GABRA6","GABRA1","GABRA4","TRAK2")
+astrocytes <- c("GFAP","S100B","AQP4","APOE", "SOX9","SLC1A3")
+oligodendrocytes <- c("MBP","MOG","OLIG1","OLIG2","SOX10")
+opc <- 
+radial_glia <- c("PTPRC","AIF1","ADGRE1", "VIM", "TNC","PTPRZ1","FAM107A","HOPX","LIFR",
+              "ITGB5","IL6ST","SLC1A3")
+epithelial <- c("HES1","HES5","SOX2","SOX10","NES","CDH1","NOTCH1")
+
+microglia <- c("IBA1","P2RY12","P2RY13","TREM119", "GPR34","SIGLECH","TREM2",
+               "CX3CR1","FCRLS","OLFML3","HEXB","TGFBR1", "SALL1","MERTK",
+               "PROS1")
+
+features_list <- c("MKI67","SOX2","POU5F1","DLX2","PAX6","SOX9","HES1","NES","RBFOX3","MAP2","NCAM1","CD24","GRIA2","GRIN2B","GABBR1","GAD1","GAD2","GABRA1","GABRB2","TH","ALDH1A1","LMX1B","NR4A2","CORIN","CALB1","KCNJ6","CXCR4","ITGA6","SLC1A3","CD44","AQP4","S100B", "PDGFRA","OLIG2","MBP","CLDN11","VIM","VCAM1")
+
+short_list <- c("MKI67","SOX9","HES1","NES","DLX2","RBFOX3","MAP2","TH","CALB1","KCNJ6","SLC1A3","CD44","AQP4","S100B","OLIG2","MBP","VIM")
+
+```
+
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in da_neurons) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+```
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in NPC_orStemLike) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+```
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in astrocytes) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+```
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in radial_glia) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+```
+
+
+```{r}
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in mature_neurons) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+
+```
+
+```{r}
+
+Idents(integrated_seurat) <- "integrated_snn_res.0.3"
+
+for (i in excitatory_neurons) {
+  print(FeaturePlot(integrated_seurat, features = i, min.cutoff = 'q1', max.cutoff = 'q97', label = TRUE))
+}
+
+
+```
+Add annotations - first pass
+NPC-stem
+NPC-glia
+NPC-SOX6
+Neurons-Glut
+Progenitors-div
+NPC-SOX2-OXT-fibro
+Neural-Stem
+stem cell
+Neuron-GABA
+Neuron-epithelial
+
+```{r}
+celltypes1 <- c("NPC-stem","NPC-glia","NPC-SOX6","Neurons-Glut","Progenitors-div",
+                "NPC-fibro","Neural-Stem","Stem","Neurons-GABA","Neural-epi")  
+integrated_seurat <- annotate(integrated_seurat, annotations = celltypes1, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes1")
+
+DimPlot(integrated_seurat, label = TRUE)
+
+```
+
+```{r}
+
+celltypes2 <- c("NPC","NPC","NPC","Neurons","NPC",
+                "NPC","NPC","Stem","Neurons","Epithelial")  
+
+integrated_seurat <- annotate(integrated_seurat, annotations = celltypes2, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes2")
+
+DimPlot(integrated_seurat, label = TRUE)
+
+```
+
+```{r}
+
+
+DimPlot(integrated_seurat, split.by = "DiseaseStatus")
+DimPlot(integrated_seurat, split.by = "DiseaseStatus", group.by = "Celltypes1")
+
+
+```
+
+```{r}
+celltypes3 <- c("NPC","NPC","NPC","Neurons","NPC-div",
+                "Neuro-NPC","Neural-Stem","Stem","Neurons","Neural-epi")  
+integrated_seurat <- annotate(integrated_seurat, annotations = celltypes3, to_label = "integrated_snn_res.0.3",annotation_name = "Celltypes3")
+
+DimPlot(integrated_seurat, label = TRUE)
+```
+```{r}
+table(integrated_seurat$IPSC_Line)
+```
+
+
+
+DEG in cell types 3 groups
+
+```{r}
+DefaultAssay(integrated_seurat) <- "RNA"
+Idents(integrated_seurat) <- "Celltypes3"
+levels(integrated_seurat)
+seu_sub <- subset(integrated_seurat, idents = "Neurons")
+dim(seu_sub)
+table(seu_sub$IPSC_Line)
+seu_sub <- ScaleData(seu_sub)
+seu_sub <- NormalizeData(seu_sub)
+
+Idents(seu_sub) <- "DiseaseStatus"
+levels(seu_sub)
+DGE <- FindMarkers(seu_sub, ident.1 = "PD", ident.2 = "Con")
+DimPlot(seu_sub, group.by = "DiseaseStatus")
+
+
+```
+```{r}
+table(seu_sub$DiseaseStatus)
+```
+
+
+Neurons DGE volcano plot
+
+```{r, fig.height= 3}
+
+library(EnhancedVolcano)
+EnhancedVolcano(DGE,
+    lab = rownames(DGE),
+    #xlim = c(-0.25,0.25),
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    pCutoff = 0.000001,
+    FCcutoff = 1,
+    pointSize = 3.0,
+    labSize = 6.0)
+
+
+
+```
+
+```{r}
+ft <- c("MGAT4C","TBR1","SLC4A10","RELN","PTPRD",
+        "GPC5","SIM1","ONECUT2","EBF1","LMX1A")
+
+DotPlot(seu_sub, features = ft) +RotatedAxis()
+
+head(DGE)
+# filter for significant pvalues
+DGE.ft <- DGE %>% filter(p_val_adj <= 0.01)
+up <- DGE.ft %>% filter(avg_log2FC > 0.1)
+down <- DGE.ft %>% filter(avg_log2FC < -0.1)
+
+
+```
+
+
+
+
+
+Create a sum of counts data table 
+
+```{r}
+sum_counts <- AggregateExpression(integrated_seurat, assay = "RNA", group.by = "sample", add.ident = "sample")
+# this seems to group by the group and the active ident together
+
+
+
+colnames(integrated_seurat@meta.data)
+dim(sum_counts$RNA)
+sum_counts_df <- as.data.frame(sum_counts$RNA)
+dim(sum_counts_df)
+write.csv(sum_counts_df, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/SumCounts_Integrated_by_sample_celltype.csv")
+sum_counts_df[1:4,1:5]
+
+
+
+```
+
+Try to separately variables in the aggregation
+
+```{r}
+colnames(integrated_seurat@meta.data)
+
+sum_counts <- AggregateExpression(integrated_seurat, assay = "RNA", group.by = c("Batch","IPSC_Line","DiseaseStatus"))
+# this seems to group by the group and the active ident together
+
+
+
+colnames(integrated_seurat@meta.data)
+dim(sum_counts$RNA)
+sum_counts_df <- as.data.frame(sum_counts$RNA)
+dim(sum_counts_df)
+
+# all cell types are integrated
+
+write.csv(sum_counts_df, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/SumCounts_Integrated_allCelltypes_12samples.csv")
+
+
+```
+
+
+Try to make the MDS plots and the DESeq2 DGE
+
+```{r}
+library( "DESeq2" )
+library(ggplot2)
+
+```
+
+Read back in the aggregated values (grouped by sample for all clusters)
+
+```{r}
+df.all <- read.csv("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/SumCounts_Integrated_allCelltypes_12samples.csv")
+
+head(df.all)
+
+```
+
+
+I need to prepare for DEGseq2
+
+```{r}
+rownames(df.all) <- df.all$X
+df.all <- df.all %>% select(-"X")
+t.df <- t(df.all)
+t.df[1:3,1:5]
+
+
+```
+
+
+Now add the meta data
+
+```{r}
+
+# Assuming df is the name of your dataframe
+sample <- as.data.frame(rownames(t.df))
+colnames(sample) <- "sample"
+
+print(sample$sample)
+
+# Assuming t.df is your original dataframe with the "sample" column
+
+# Extract values for "Batch," "Line," and "DiseaseStatus" using regular expressions
+sample_names <- sample$sample
+sample_info <- strsplit(sample_names, "_")
+sample_info <- do.call(rbind, sample_info)
+
+# Create new columns for "Batch," "Line," and "DiseaseStatus"
+sample$Batch <- sample_info[, 1]
+sample$Line <- sample_info[, 2]
+sample$DiseaseStatus <- sample_info[, 3]
+
+# Display the updated dataframe
+print(sample)
+
+#now add the meta data to the gene RNA read sum matrix
+meta.df.all <- cbind(sample, t.df)
+
+head(meta.df.all)
+
+```
+Prepare objects for DEGseq2
+
+```{r}
+library( "DESeq2" )
+# the input is a dataframe with only expression values no meta data
+# the dataframe gets transposed back so the initial DF all is correct
+dft <- df.all # columns are samples and genes are rows
+
+#prepare the dds object 
+# we need the transposed data frame no meta data
+
+dfi <- lapply(dft, as.integer)
+dfi <- as.data.frame(dfi)
+rownames(dfi) <- rownames(dft)
+
+# here we need the meta data
+df.meta <- sample
+# and we need what variable to compare
+
+dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta, design = ~DiseaseStatus)
+
+# I ran this originally with all data
+
+```
+```{r}
+# see the object
+dds
+```
+Now we run the DESEQ function
+
+```{r}
+dds <- DESeq(dds)
+```
+Look at the results
+
+```{r}
+res <- results(dds)
+head(results(dds, tidy= TRUE))
+
+```
+
+```{r}
+summary(res)
+
+```
+```{r, fig.height= 5}
+library(EnhancedVolcano)
+  EnhancedVolcano(res,
+    lab = rownames(res),
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    title = 'All cell types NPCs',
+    pCutoff = 0.001,
+    FCcutoff = 2.5,
+    pointSize = 5.0,
+    labSize = 5, 
+    legendLabSize = 15,
+    legendIconSize = 2)
+
+```
+
+```{r}
+
+vsdata <- varianceStabilizingTransformation(dds)
+
+plotPCA(vsdata, intgroup="DiseaseStatus")
+plotPCA(vsdata, intgroup="Line")
+plotPCA(vsdata, intgroup="Batch")
+plotPCA(vsdata, intgroup="sample")
+
+```
+
+DESeq2 analysis from the cell type separate aggregated data
+
+```{r}
+library(tidyverse)
+df <- read.csv("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/SumCounts_Integrated_by_sample_celltype.csv")
+
+rownames(df) <- df$X
+df <- df %>% select(-"X")
+colnames(df)
+
+```
+
+Make the metadata 
+
+```{r}
+# Assuming df is your original dataframe
+
+# Extract values for "Celltype," "Line," and "Batch" using regular expressions
+col_names <- colnames(df)
+meta_info <- strsplit(col_names, "_")
+meta_info <- do.call(rbind, meta_info)
+
+# Split Line and Batch information
+line_info <- substring(meta_info[, 2], 1, nchar(meta_info[, 2]) - 1)
+batch_info <- substring(meta_info[, 2], nchar(meta_info[, 2]), nchar(meta_info[, 2]))
+
+# Create the metadata dataframe df.meta
+df.meta <- data.frame(
+  Sample = col_names,
+  Celltype = meta_info[, 1],
+  Line = line_info,
+  Batch = batch_info
+)
+
+# Create the "DiseaseStatus" column
+disease_status <- ifelse(grepl("TD07|x2965", line_info), "PD", "Con")
+Mix1 <- ifelse(grepl("TD07|TD22", line_info), "A", "B")
+Mix2 <- ifelse(grepl("x3448|TD07", line_info), "A", "B")
+# Create the metadata dataframe df.meta
+df.meta <- data.frame(
+  Sample = col_names,
+  Celltype = meta_info[, 1],
+  Line = line_info,
+  Batch = batch_info,
+  DiseaseStatus = disease_status,
+  Mix1 = Mix1,
+  Mix2 = Mix2
+)
+
+# Display the metadata dataframe
+print(df.meta)
+
+```
+
+Now set up for the DEG
+
+```{r}
+library(DESeq2)
+# the input is a dataframe with only expression values no meta data
+# the aggregate seurat function is already in this format
+# however to use only one cell type it needs to be subset in advance
+# here again I will use all the cell types
+dft <- df # columns are samples and genes are rows
+dim(dft)
+#prepare the dds object 
+# we need the transposed data frame no meta data
+
+dfi <- lapply(dft, as.integer)
+dfi <- as.data.frame(dfi)
+dim(dfi)
+rownames(dfi) <- rownames(dft)
+
+# here we need the meta data
+# was created above = df.meta
+# and we need what variable to compare
+
+dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta, design = ~DiseaseStatus)
+
+
+```
+
+
+```{r}
+# see the object
+dds
+# run DeqSeq2
+dds <- DESeq(dds)
+# see results
+res <- results(dds)
+head(results(dds, tidy= TRUE))
+summary(res)
+
+```
+PCA plots
+
+```{r}
+vsdata <- varianceStabilizingTransformation(dds)
+
+plotPCA(vsdata, intgroup="DiseaseStatus")
+plotPCA(vsdata, intgroup="Line")
+plotPCA(vsdata, intgroup="Batch")
+plotPCA(vsdata, intgroup="Sample")
+plotPCA(vsdata, intgroup = "Celltype")
+
+```
+
+
+Subset full dataframe by cell type
+
+
+```{r}
+# Assuming df.trans is your transposed dataframe and df.meta is your metadata dataframe
+
+# Load necessary library
+#library(DESeq2)
+
+# Extract unique cell types from the "Celltype" column in df.meta
+Celltypes <- unique(df.meta$Celltype)
+print(Celltypes)
+# Create an empty list to store DESeq results for each cell type
+list.results <- list()
+
+df.trans <- as.data.frame(t(df))
+dim(df.trans)
+#df.trans[1:3,1:5]
+#dim(df.meta)
+
+
+# Loop through each cell type and perform DESeq analysis
+for (i in Celltypes) {
+  # Subset the expression dataframe by the current cell type
+  print(i)
+  df_sub <- df.trans[grepl(paste0("^",i,"_"), rownames(df.trans)), ]
+  print(dim(df_sub))
+
+  df.meta_sub <- df.meta[df.meta$Celltype == i, ]
+  print(dim(df.meta_sub))
+# Prepare the DESeq object
+  dft <- as.data.frame(t(df_sub)) # Transpose the subset dataframe to get genes as rows and samples as columns
+  dfi <- lapply(dft, as.integer)
+  dfi <- as.data.frame(dfi)
+  rownames(dfi) <- rownames(dft)
+
+  
+  # Create the DESeqDataSet object using the subset dataframe and metadata
+  dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~DiseaseStatus)
+
+  # Perform DESeq analysis
+  dds <- DESeq(dds)
+
+  # Store the DESeq results in the list with the cell type as the list index
+  res <- results(dds)
+  list2 <- list()
+  list2[["dds"]] <- dds
+  list2[["results"]] <- res
+  list.results[[i]] <- list2
+}
+
+# The list "list.results" now contains DESeq results for each cell type
+# You can access the results for a specific cell type using list.results$CellType
+# For example, if you want the results for the cell type "NPC", you can access them using list.results[["NPC"]]
+
+saveRDS(list.results, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/DGEbycelltypeJulyannotation_list.RDS")
+
+
+```
+A look at the results
+
+```{r}
+
+res <- results(dds)
+head(results(dds, tidy= TRUE))
+summary(res)
+
+```
+```{r}
+dds <- list.results$NPC$dds
+
+vsdata <- varianceStabilizingTransformation(dds)
+
+plotPCA(vsdata, intgroup="DiseaseStatus")
+plotPCA(vsdata, intgroup="Line")
+plotPCA(vsdata, intgroup="Batch")
+plotPCA(vsdata, intgroup="Sample")
+plotPCA(vsdata, intgroup = "Celltype")
+
+```
+
+```{r, fig.height=6}
+
+library(EnhancedVolcano)
+  EnhancedVolcano(res,
+    lab = rownames(res),
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    title = 'NPC',
+    ylim = c(0,20),
+    pCutoff = 0.01,
+    FCcutoff = 2.5,
+    pointSize = 5.0,
+    labSize = 5, 
+    legendLabSize = 15,
+    legendIconSize = 5)
+
+```
+
+Get the DGE dataframe
+
+```{r}
+
+df.res <- as.data.frame(list.results$NPC$results)
+#write.csv(df.res, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/DGE_NPC_pseudobulk_PDvsCon.csv")
+
+head(df.res)
+#get some info
+pval <- df.res %>% filter(pvalue <= 0.01)
+dim(pval)
+padj <- df.res %>% filter(padj <= 0.05)
+dim(padj)
+padj <- df.res %>% filter(padj <= 0.01)
+dim(padj)
+
+up <- padj %>% filter(log2FoldChange > 0)
+dim(up)
+down <- padj %>% filter(log2FoldChange < 0)
+dim(down)
+
+head(padj)
+
+```
+
+Create a summary dataframe from the DGE 
+
+```{r}
+
+res1 <- as.data.frame(list.results$Neurons$results)
+
+res1$Celltype <- "Neurons"
+res1$Gene <- rownames(res1)
+res.sig <- (res1 %>% filter(pvalue <= 0.05)) %>% select(c("Gene","Celltype","log2FoldChange","pvalue","padj"))
+res.sig 
+
+
+
+```
+
+
+Some DGE analysis for NPC to compare
+
+```{r}
+
+library(enrichR)
+setEnrichrSite("Enrichr") # Human genes
+# list of all the databases
+# get the possible libraries
+dbs <- listEnrichrDbs()
+
+# this will list the possible libraries
+dbs
+
+# select libraries with cell types
+db <- c('KEGG_2019_Human','GWAS_Catalog_2019',"GO_Biological_Process_2023",
+        "GO_Cellular_Component_2023","GO_Molecular_Function_2023")
+
+# function for a quick look - the names for filtering need to match the column names
+getGSA <- function(dataframe, up_or_down = "up", LFCthresh = 0.01,
+                          pval_thresh = 0.05){
+  if(up_or_down == "up"){
+      genelist <- dataframe %>% filter(log2FoldChange >= LFCthresh & padj < pval_thresh)
+  }else if (up_or_down == "down") {
+      genelist <- dataframe %>% filter(log2FoldChange <= LFCthresh & padj < pval_thresh)
+  } else {
+    genelist <- dataframe %>% filter(padj < pval_thresh)
+  }
+genes <- genelist$X
+  # the cell type libraries
+  # get the results for each library
+  results <- enrichr(genes, databases = db)
+  # visualize the results
+  
+print(plotEnrich(results[[1]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'KEGG'))
+print(plotEnrich(results[[2]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GWAS'))
+print(plotEnrich(results[[3]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GObio'))
+print(plotEnrich(results[[4]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GOcell'))
+print(plotEnrich(results[[5]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GOmol'))
+return(results)
+}
+
+
+
+```
+
+```{r}
+# use only the significant after p adjusted genes
+# add genes column to DGE it is X if saved to csv
+padj$X <- rownames(padj)
+
+pseudoDGEup <- getGSA(padj, up_or_down = "up",
+                LFCthresh = 0.02,
+                pval_thresh = 0.05)
+
+```
+
+```{r}
+pseudoDGEdown <- getGSA(padj, up_or_down = "down",
+                LFCthresh = -0.02,
+                pval_thresh = 0.05)
+```
+
+```{r}
+pseudoDGEdown <- getGSA(padj, up_or_down = "both",
+                LFCthresh = 0,
+                pval_thresh = 0.05)
+
+```
+
+
+
+Compare genes in wilcoxing rank verse pseudo bulk
+
+```{r}
+
+scDGE.NPC <- read.csv("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/DGEseuratNPCs.csv")
+
+head(scDGE.NPC)
+
+```
+
+
+```{r}
+library("ggvenn")
+# make the list of the comparisons to get number of genes for venn
+
+sc.up <- scDGE.NPC %>% filter(avg_log2FC >= 0 & p_val_adj <= 0.05)
+sc.down <- scDGE.NPC %>% filter(avg_log2FC < 0 & p_val_adj <= 0.05)
+pb.up <- res1 %>% filter(log2FoldChange >= 0 & padj <= 0.05)
+pb.down <- res1 %>% filter(log2FoldChange < 0 & padj <= 0.05)
+
+
+contrast.list <- list(A= sc.up$X, B= sc.down$X, 
+                      C=pb.up$Gene, D= pb.down$Gene)
+# plot the VENN
+
+
+names(contrast.list) <- c("sUp","sDown","pUp", "pDown")
+ggvenn(
+  contrast.list, 
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.75, set_name_size = 5, show_percentage = FALSE, text_size = 5, fill_alpha = 0.75
+  )
+
+# compare all
+
+
+sc <- scDGE.NPC %>% filter(p_val_adj <= 0.05)
+pb <- res1 %>% filter(padj <= 0.05)
+
+contrast.list <- list(A= sc$X, B= pb$Gene)
+# plot the VENN
+
+
+names(contrast.list) <- c("single cells","pseudobulk")
+ggvenn(
+  contrast.list, 
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.75, set_name_size = 5, show_percentage = FALSE, text_size = 5, fill_alpha = 0.75
+  )
+
+
+
+
+```
+
+
+Look for the overlapping genes
+
+```{r}
+sc.up <- scDGE.NPC %>% filter(avg_log2FC >= 0 & p_val_adj <= 0.05)
+sc.down <- scDGE.NPC %>% filter(avg_log2FC < 0 & p_val_adj <= 0.05)
+pb.up <- res1 %>% filter(log2FoldChange >= 0 & padj <= 0.05)
+pb.down <- res1 %>% filter(log2FoldChange < 0 & padj <= 0.05)
+A= sc.up$X
+B= sc.down$X 
+C=pb.up$Gene
+D= pb.down$Gene
+
+
+up.overlap <- intersect(A, C)
+up.overlap
+
+down.overlap <- intersect(B,D)
+down.overlap
+
+```
+
+
+Check DGE between cell lines
+
+```{r}
+list.results.lines <- list()
+
+df.trans <- as.data.frame(t(df))
+dim(df.trans)
+#df.trans[1:3,1:5]
+#dim(df.meta)
+
+
+# Loop through each cell type and perform DESeq analysis
+for (i in Celltypes) {
+  # Subset the expression dataframe by the current cell type
+  print(i)
+  df_sub <- df.trans[grepl(paste0("^",i,"_"), rownames(df.trans)), ]
+  print(dim(df_sub))
+
+  df.meta_sub <- df.meta[df.meta$Celltype == i, ]
+  print(dim(df.meta_sub))
+# Prepare the DESeq object
+  dft <- as.data.frame(t(df_sub)) # Transpose the subset dataframe to get genes as rows and samples as columns
+  dfi <- lapply(dft, as.integer)
+  dfi <- as.data.frame(dfi)
+  rownames(dfi) <- rownames(dft)
+
+  
+  # Create the DESeqDataSet object using the subset dataframe and metadata
+  dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~Line)
+
+  # Perform DESeq analysis
+  dds <- DESeq(dds)
+  
+  
+
+  # Store the DESeq results in the list with the cell type as the list index
+  res <- results(dds)
+  list2 <- list()
+  list2[["dds"]] <- dds
+  list2[["results"]] <- res
+  list.results.lines[[i]] <- list2
+}
+
+
+
+```
+
+
+```{r}
+# look at some results 
+# NPC
+summary(list.results.lines$NPC$results)
+head(list.results.lines$NPC$results)
+
+results <- as.data.frame(list.results.lines$NPC$results)
+
+```
+
+To see each contrast:
+
+```{r}
+
+# Assuming you have already run DESeq() on your DESeqDataSet
+dds <- DESeq(dds)
+
+dds <- list.results.lines$NPC$dds
+# Get the list of contrasts (pairwise comparisons)
+all_contrasts <- c("TD22B", "TD07B", "x2965B", "x3448B")
+
+# Initialize an empty list to store the results
+all_results <- list()
+# Loop through each contrast and calculate the results
+for (i in 1:length(all_contrasts)) {
+  for (j in (i+1):length(all_contrasts)) {
+    contrast_level1 <- all_contrasts[i]
+    contrast_level2 <- all_contrasts[j]
+    
+    # Check if both levels have at least one sample
+    if (sum(dds$Line == contrast_level1) > 0 & sum(dds$Line == contrast_level2) > 0) {
+      contrast_name <- paste("Line", contrast_level1, "vs", contrast_level2)
+      contrast_result <- results(dds, contrast = c("Line", contrast_level1, contrast_level2), name = contrast_name)
+      all_results[[contrast_name]] <- contrast_result
+    }
+  }
+}
+
+
+# Now, all_results will contain the DESeq results for each valid contrast
+# You can access them using the respective contrast name as an index
+
+# For example, to access the results for "TD22" vs "TD07", you can use:
+td22_vs_td07_results <- as.data.frame(all_results$`Line TD22B vs TD07B`)
+
+# And for "x2965" vs "x3448", you can use:
+x2965_vs_x3448_results <- as.data.frame(all_results$`Line x2965B vs x3448B`)
+
+
+# each contrast 
+line.constrasts <- all_results
+
+head(x2965_vs_x3448_results)
+colnames(x2965_vs_x3448_results)
+
+```
+
+```{r}
+# Initialize an empty list to store the results
+all_results <- list()
+
+# Loop through each contrast and calculate the results
+for (i in 1:length(all_contrasts)) {
+  for (j in (i+1):length(all_contrasts)) {
+    contrast_level1 <- all_contrasts[i]
+    contrast_level2 <- all_contrasts[j]
+    
+    # Check if both levels are present in dds$Line
+    if (contrast_level1 %in% dds$Line & contrast_level2 %in% dds$Line) {
+      contrast_name <- paste("Line", contrast_level1, "vs", contrast_level2)
+      contrast_result <- results(dds, contrast = c("Line", contrast_level1, contrast_level2), name = contrast_name)
+      all_results[[contrast_name]] <- contrast_result
+    }
+  }
+}
+
+
+```
+
+```{r}
+
+# Create a function to summarize the results for each contrast
+summarize_contrast <- function(result) {
+  num_de_genes <- sum(result$padj <= 0.05, na.rm = TRUE)
+  num_downregulated <- sum(result$padj <= 0.05 & result$log2FoldChange < 0, na.rm = TRUE)
+  num_upregulated <- sum(result$padj <= 0.05 & result$log2FoldChange > 0, na.rm = TRUE)
+  
+  return(data.frame(NumGenes = num_de_genes, NumDownregulated = num_downregulated, NumUpregulated = num_upregulated))
+}
+
+# Initialize an empty list to store the summary results
+summary_results <- list()
+
+# Loop through each contrast and summarize the results
+for (contrast_name in names(all_results)) {
+  contrast_result <- all_results[[contrast_name]]
+  summary_result <- summarize_contrast(contrast_result)
+  summary_results[[contrast_name]] <- summary_result
+}
+
+# Combine all the summary results into a single data frame
+summary_table <- do.call(rbind, summary_results)
+
+# Add a column with the contrast names as row names
+rownames(summary_table) <- names(all_results)
+
+# Print the summary table
+print(summary_table)
+
+```
+
+Look at other contrasts instead of PD vs HC - HC + PD vs HC + PD and the reverse combo
+
+
+```{r}
+ 
+# add to meta data
+list.results <- list()
+
+df.trans <- as.data.frame(t(df))
+dim(df.trans)
+#df.trans[1:3,1:5]
+#dim(df.meta)
+
+list2 <- list()
+# Loop through each cell type and perform DESeq analysis
+for (i in Celltypes) {
+  # Subset the expression dataframe by the current cell type
+  print(i)
+  df_sub <- df.trans[grepl(paste0("^",i,"_"), rownames(df.trans)), ]
+  print(dim(df_sub))
+
+  df.meta_sub <- df.meta[df.meta$Celltype == i, ]
+  print(dim(df.meta_sub))
+# Prepare the DESeq object
+  dft <- as.data.frame(t(df_sub)) # Transpose the subset dataframe to get genes as rows and samples as columns
+  dfi <- lapply(dft, as.integer)
+  dfi <- as.data.frame(dfi)
+  rownames(dfi) <- rownames(dft)
+
+  
+  # Create the DESeqDataSet object using the subset dataframe and metadata
+  dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~DiseaseStatus)
+  # Perform DESeq analysis
+  dds <- DESeq(dds)
+  # Store the DESeq results in the list with the cell type as the list index
+  res <- results(dds)
+  list2[["dds.DiseaseStatus"]] <- dds
+  list2[["results.DiseaseStatus"]] <- res
+  
+  # check the other cell type combination mixes
+  dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~Mix1)
+  # Perform DESeq analysis
+  dds <- DESeq(dds)
+  # Store the DESeq results in the list with the cell type as the list index
+  res <- results(dds)
+  
+  list2[["dds.Mix1"]] <- dds
+  list2[["results.Mix1"]] <- res
+  
+    # check the other cell type combination mixes
+  dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~Mix2)
+  # Perform DESeq analysis
+  dds <- DESeq(dds)
+  # Store the DESeq results in the list with the cell type as the list index
+  res <- results(dds)
+  list2[["dds.Mix2"]] <- dds
+  list2[["results.Mix2"]] <- res
+  
+  list.results.lines[[i]] <- list2
+}
+
+
+
+
+```
+Summarize the results for NPC for the different contrasts
+
+```{r}
+# function contrast_name is above
+
+all_results.NPC <- list(PDvsHC = list.results.lines$NPC$results.DiseaseStatus,
+                        Mix1 = list.results.lines$NPC$results.Mix1,
+                        Mix2 = list.results.lines$NPC$results.Mix2)
+all_results <- all_results.NPC
+
+summary_results <- list()
+# Loop through each contrast and summarize the results
+for (contrast_name in names(all_results)) {
+  contrast_result <- all_results[[contrast_name]]
+  summary_result <- summarize_contrast(contrast_result)
+  summary_results[[contrast_name]] <- summary_result
+}
+
+# Combine all the summary results into a single data frame
+summary_table <- do.call(rbind, summary_results)
+
+# Add a column with the contrast names as row names
+rownames(summary_table) <- names(all_results)
+
+# Print the summary table
+print(summary_table)
+
+```
+
+Have a look at the DGE for NPC
+
+```{r}
+
+res <- all_results.NPC$PDvsHC
+summary(res)
+
+```
+
+NPC PD vs Control Volcano
+```{r, fig.height=3}
+
+#library(EnhancedVolcano)
+vplot <- EnhancedVolcano(res,
+    lab = rownames(res),
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    ylim = c(0,20),
+    pCutoff = 0.01,
+    FCcutoff = 2.5,
+    pointSize = 5.0,
+    labSize = 5, 
+    #legendLabSize = 20,
+    #subtitleLabSize = 20,
+    #legendIconSize = 10,
+    ) + theme(axis.text.x = element_text(size = 20),
+  axis.text.y = element_text(size = 20))
+
+vplot
+    
+df <- as.data.frame(res)
+df$X <- rownames(df)
+pseudoDGE <- getGSA(df, up_or_down = "both",
+                LFCthresh = 0,
+                pval_thresh = 0.01)
+                
+
+plotEnrich(pseudoDGE[[3]], showTerms = 15, numChar = 30, y = "Count", orderBy = "P.value", title = 'GO biology')  
+  
+
+```
+
+
+
+GSEA
+
+```{r}
+df <- as.data.frame(res)
+df$X <- rownames(df)
+pseudoDGE <- getGSA(df, up_or_down = "both",
+                LFCthresh = 0,
+                pval_thresh = 0.01)
+                
+png("")
+plotEnrich(pseudoDGE[[3]], showTerms = 15, numChar = 30, y = "Count", orderBy = "P.value", title = 'GO biology')  
+
+```
+
+
+
+
+Between batches - NPC - not complete
+
+
+```{r}
+
+i = "NPC"
+df_sub <- df.trans[grepl(paste0("^",i,"_"), rownames(df.trans)), ]
+  print(dim(df_sub))
+
+  df.meta_sub <- df.meta[df.meta$Celltype == i, ]
+  print(dim(df.meta_sub))
+# Prepare the DESeq object
+  dft <- as.data.frame(t(df_sub)) # Transpose the subset dataframe to get genes as rows and samples as columns
+  dfi <- lapply(dft, as.integer)
+  dfi <- as.data.frame(dfi)
+  rownames(dfi) <- rownames(dft)
+
+  
+  # Create the DESeqDataSet object using the subset dataframe and metadata
+  dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~Batch)
+
+  res <- results(dds)
+
+```
+
+
+# Save CSV of each result from a DGE
+
+```{r}
+
+
+
+
+```
+
+# Rename function - to see
+
+
