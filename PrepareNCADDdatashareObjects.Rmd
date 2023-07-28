@@ -1,0 +1,352 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Prepare data for NCADD sharing
+
+Data objects 
+• Experiment 1: 12 samples NPCs (4 lines X 3 replicates)
+• Experiment 2: NPCs (4 HC, 8 PD, no replicates)
+• Experiment 1 + 2 : 12 samples NPCs (4 lines X 3 replicates)NPCs (4 HC, 8 PD, no replicates)
+* Experiment 2: Neurons (2 HC, 4 PD, no replicates)
+
+```{r}
+library(Seurat)
+library(tidyverse)
+
+```
+
+The same annotation should be used on the two NPC data types
+
+```{r}
+NPCex1 <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/Integrated12samples.RDS")
+
+NPCex2 <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesintegratedNPCs.RDS")
+
+colnames(NPCex1@meta.data)
+colnames(NPCex2@meta.data)
+
+# remove the isogenics
+#Idents(NPCex2) <- "DiseaseStatus"
+#seu <- subset(NPCex2, idents = c("HC","PD"))
+#unique(seu$DiseaseStatus)
+
+#NPCex2 <- seu
+#rm(seu)
+#unique(NPCex2$DiseaseStatus)
+
+#unique(NPCex1$Celltypes1)
+#unique(NPCex2$Celltypes1)
+
+#saveRDS(NPCex2, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesintegratedNPCsPDHConly.RDS")
+
+# NPCex2 <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesintegratedNPCsPDHConly.RDS")
+
+```
+
+Integrate the 2 NPC samples
+
+```{r}
+
+dim(NPCex1)
+dim(NPCex2)
+
+```
+
+Integrate
+
+```{r}
+
+DefaultAssay(NPCex1) <- "RNA"
+DefaultAssay(NPCex2) <- "RNA"
+NPCex1$orig.ident <- "NPCex1"
+NPCex2$orig.ident <- "NPCex2"
+
+sublist <- list("EX1" = NPCex1,"EX2" = NPCex2)
+seu <- integrate_seurat_objects(sublist)
+
+
+```
+
+Try to break apart the steps
+```{r}
+
+seurat_list <- sublist
+rm(sublist)
+
+for (i in 1:length(seurat_list)) {
+    seurat_list[[i]] <- NormalizeData(seurat_list[[i]], verbose = FALSE)
+    seurat_list[[i]] <- ScaleData(seurat_list[[i]], verbose = FALSE)
+    seurat_list[[i]] <- FindVariableFeatures(seurat_list[[i]], selection.method = "vst")
+    seurat_list[[i]] <- RunPCA(seurat_list[[i]], verbose = FALSE, npcs = 30)
+  }
+  # Find integration anchors
+  int.anchors <- FindIntegrationAnchors(object.list = seurat_list, dims = 1:30,
+                                        anchor.features = 1000)
+
+#saveRDS(int.anchors,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/AnchorsNPCex1and2.RDS")
+  
+# read in the anchors 
+int.anchors <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/AnchorsNPCex1and2.RDS")
+
+#saveRDS(seurat_list,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ListNPCex1and2.RDS")
+  # Integrate data
+seurat_list <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ListNPCex1and2.RDS")
+
+seu <- merge(seurat_list[[1]], seurat_list[[2]])
+seu <- IntegrateData(anchorset = int.anchors)
+
+
+
+  
+  
+
+```
+
+
+
+
+```{r}
+# make UMAP from integrated
+seu <- integrated_seurat
+seu <- ScaleData(seu)
+seu <- RunPCA(seu, npcs = 20, verbose = FALSE)
+seu <- RunUMAP(seu, reduction = "pca", dims = 1:20, n.neighbors = 81)
+seu <- FindVariableFeatures(seu)
+seu <- FindNeighbors(seu, dims = 1:20, k.param = 81)
+seu <- FindClusters(seu, resolution = 0.3)
+DimPlot(seu)
+
+```
+
+Look at the current cell type annotations 
+
+```{r}
+
+DimPlot(seu, group.by = "Celltypes1")
+
+```
+
+
+
+```{r}
+tb <- table(NPCex2$DiseaseStatus,NPCex2$Line)
+print(tb)
+length(unique(NPCex2$Line))
+input_vector <- unique(NPCex2$Line)
+
+unique(NPCex2$sample)
+
+
+
+```
+```{r}
+neurons <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesNeurons.RDS")
+
+```
+
+
+```{r}
+unique(neurons$sample)
+
+```
+
+
+Test removing excess metadata
+
+```{r}
+# Assuming you have a Seurat object named 'seurat_obj'
+# And you want to remove metadata columns except for the ones listed in 'metadata_to_keep'
+seurat_obj <- NPCex2
+# Define the metadata columns you want to keep
+metadata_to_keep <- c("orig.ident","nCount_RNA","nFeature_RNA","gene_count",
+                      "sample","DiseaseStatus", "Line","Celltypes1",
+                      "Celltypes2","Celltypes3")
+
+# Update the Seurat object to keep only the desired metadata columns
+seurat_obj@meta.data <- seurat_obj@meta.data[, metadata_to_keep]
+colnames(seurat_obj@meta.data)
+
+# add the Batch annotation
+Idents(seurat_obj) <- "sample"
+levels(seurat_obj)
+
+
+
+```
+```{r}
+annotate <- function(seu, annotations, to_label, annotation_name = "CellType"){
+  Idents(seu) <- to_label
+  names(annotations) <- levels(seu)
+  seu <- RenameIdents(seu, annotations)
+  seu <- AddMetaData(object=seu, metadata=Idents(seu), col.name = annotation_name)
+
+}
+
+```
+
+```{r}
+# add batch
+# batch 4 for replicate 1 and batch 5 if there is a second replicate
+
+Batch <- c("B4", "B4",  "B5", "B4", "B4", "B4",
+           "B4", "B4",  "B4",  "B4",   "B4", "B4",
+           "B4", "B4",  "B4",  "B4", "B4",  "B4",
+           "B4",  "B4",  "B4",   "B4", "B4")
+
+seurat_obj <- annotate(seurat_obj, annotations = Batch, to_label = "sample",
+                       annotation_name = "Batch")
+
+levels(seurat_obj)
+
+DimPlot(seurat_obj, group.by = "sample")
+DimPlot(seurat_obj, group.by = "DiseaseStatus")
+
+Idents(seurat_obj) <- "DiseaseStatus"
+
+NPCex2 <- subset(seurat_obj, idents = c("HC","PD"))
+
+DimPlot(NPCex2, group.by = "DiseaseStatus")
+
+```
+
+
+```{r}
+# save the EX2 NPC with only the PD and HC plus the batch annotation
+saveRDS(NPCex2,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/ParseNCADDsamplesintegratedNPCsPDHConly.RDS")
+
+```
+
+Check the orig.ident
+```{r}
+
+Idents(NPCex2) <- "orig.ident"
+NPCex2$orig.ident <- "EX2"
+unique(NPCex2$orig.ident)
+
+```
+
+Look at the EX1 and remove excess meta data
+
+```{r}
+colnames(NPCex1@meta.data)
+NPCex1 <- AddMetaData(NPCex1, metadata = Idents(NPCex1), col.name = "Line")
+
+seurat_obj <- NPCex1
+# Define the metadata columns you want to keep
+metadata_to_keep <- c("orig.ident","nCount_RNA","nFeature_RNA","gene_count",
+                      "sample","DiseaseStatus", "Line","Celltypes1",
+                      "Celltypes2","Celltypes3")
+
+# Update the Seurat object to keep only the desired metadata columns
+seurat_obj@meta.data <- seurat_obj@meta.data[, metadata_to_keep]
+colnames(seurat_obj@meta.data)
+
+Idents(seurat_obj) <- "orig.ident"
+seurat_obj$orig.ident <- "EX1"
+unique(seurat_obj$orig.ident)
+
+DimPlot(seurat_obj, group.by = "DiseaseStatus")
+
+```
+
+Process the two data objects
+
+```{r}
+# EX1
+NPCex1 <- seurat_obj
+
+NPCex1 <- NormalizeData(NPCex1, verbose = FALSE)
+NPCex1 <- ScaleData(NPCex1, verbose = FALSE) # must be run for PCA?
+NPCex1 <- FindVariableFeatures(NPCex1, selection.method = "vst")
+NPCex1 <- RunPCA(NPCex1, verbose = FALSE, npcs = 30)
+NPCex1 <- RunUMAP(NPCex1, dims = 1:30)
+
+DimPlot(NPCex1, group.by = "Celltypes1")
+DimPlot(NPCex1, group.by = "Celltypes2")
+DimPlot(NPCex1, group.by = "Celltypes3")
+
+```
+
+
+```{r}
+
+NPCex2 <- NormalizeData(NPCex2, verbose = FALSE)
+NPCex2 <- ScaleData(NPCex2, verbose = FALSE)
+NPCex2 <- FindVariableFeatures(NPCex2, selection.method = "vst")
+NPCex2 <- RunPCA(NPCex2, verbose = FALSE, npcs = 30)
+NPCex2 <- RunUMAP(NPCex2, dims = 1:30)
+
+DimPlot(NPCex2, group.by = "Celltypes1")
+DimPlot(NPCex2, group.by = "Celltypes2")
+DimPlot(NPCex2, group.by = "Celltypes3")
+
+```
+
+```{r}
+NPCex1 <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/NPCex1.RDS")
+NPCex2 <- readRDS("/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/NPCex2.RDS")
+```
+
+
+Integrate the seurat objects
+
+```{r}
+
+seu <- merge(NPCex1, NPCex2)
+unique(seu$orig.ident)
+
+```
+
+
+Save the processed objects
+
+```{r}
+#saveRDS(NPCex1,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/NPCex1.RDS")
+#saveRDS(NPCex2,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/NPCex2.RDS")
+
+saveRDS(seu,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/NPCex1_ex2.RDS")
+
+
+```
+
+
+
+See a UMAP without integration just from the merged but using the integrated RNA from the previous integrations
+
+
+```{r}
+DefaultAssay(seu) <- "integrated"
+
+seu <- ScaleData(seu, verbose = FALSE)
+int_genes <- rownames(seu@assays[["integrated"]]@meta.features)
+#seu <- FindVariableFeatures(seu, selection.method = "vst", nfeatures = 2000)
+# use the genes that were for integrating each of the separate data sets
+# each would have been set to 2000 and there is 2427 genes - many will be overlapping
+seu <- RunPCA(seu, npcs = 30, verbose = FALSE, features = int_genes)
+seu <- RunUMAP(seu, reduction = "pca", dims = 1:30)
+
+DimPlot(seu, group.by = "orig.ident")
+
+# okay so they need to be integrated!
+
+```
+```{r}
+
+# the variable features were removed either by merging or by reprocessing for PCA 
+seu <- merge(NPCex1, NPCex2)
+
+seurat_list <- SplitObject(seu, split.by = "orig.ident")
+
+# Find integration anchors
+int.anchors <- FindIntegrationAnchors(object.list = seurat_list, dims = 1:25,
+                                        anchor.features = 1000)
+
+# Integrate the data
+integrated_seurat <- IntegrateData(anchorset = integration_anchors, dims = 1:25)
+
+
+```
+
+

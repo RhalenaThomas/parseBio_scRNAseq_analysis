@@ -1066,7 +1066,130 @@ print(summary_table)
 write.csv(summary_table,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/DGE_summary_counts_NPCcultures.csv")
 saveRDS(list.results, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/DGE_NPCculturesList.RDS")
 
+
+
 ```
+
+Try another threshold
+
+```{r}
+summarize_contrast <- function(result) {
+  num_de_genes <- sum(result$padj <= 0.1, na.rm = TRUE)
+  num_downregulated <- sum(result$padj <= 0.1 & result$log2FoldChange < 0, na.rm = TRUE)
+  num_upregulated <- sum(result$padj <= 0.1 & result$log2FoldChange > 0, na.rm = TRUE)
+  
+  return(data.frame(NumGenes = num_de_genes, NumDownregulated = num_downregulated, NumUpregulated = num_upregulated))
+}
+
+# Initialize an empty list to store the summary results for each cell type and contrast
+summary_results_list <- vector("list", length(Celltypes))
+names(summary_results_list) <- Celltypes
+
+# Loop through each cell type and summarize the results for each contrast
+for (i in seq_along(Celltypes)) {
+  # Get the results for the current cell type
+  all_results_celltype <- list.results[[Celltypes[i]]][["contrast_results"]]
+  
+  # Initialize lists to store the summary results for each contrast
+  contrasts <- names(all_results_celltype)
+  num_contrasts <- length(contrasts)
+  celltype_summary <- data.frame(
+    Celltype = rep(Celltypes[i], num_contrasts),
+    Contrast = contrasts,
+    DGE_total = numeric(num_contrasts),
+    DGE_up = numeric(num_contrasts),
+    DGE_down = numeric(num_contrasts)
+  )
+  
+  # Loop through each contrast and summarize the results
+  for (j in seq_along(contrasts)) {
+    contrast_name <- contrasts[j]
+    contrast_result <- all_results_celltype[[contrast_name]]
+    summary_result <- summarize_contrast(contrast_result)
+    
+    # Store the summary results for the current contrast
+    celltype_summary[j, "DGE_total"] <- summary_result$NumGenes
+    celltype_summary[j, "DGE_up"] <- summary_result$NumUpregulated
+    celltype_summary[j, "DGE_down"] <- summary_result$NumDownregulated
+  }
+  
+  # Store the summary results for the current cell type
+  summary_results_list[[Celltypes[i]]] <- celltype_summary
+}
+
+# Combine all the summary results into a single data frame
+summary_table <- do.call(rbind, summary_results_list)
+
+# Print the summary table
+print(summary_table)
+#"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Experiment1-mini12/SumCounts_NPC_from48sample.csv"
+write.csv(summary_table,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/DGE_summary_counts_NPCculturesthresh1.csv")
+#saveRDS(list.results, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/DGE_NPCculturesList.RDS")
+
+
+```
+
+```{r}
+# library(tidyverse)
+NPC.div.HCvsPD <- as.data.frame(list.results$`NPC-div`$contrast_results$`DiseaseStatus HC vs PD`)
+
+NPC.div.HCvsPD <- NPC.div.HCvsPD %>% filter(padj < 0.1)
+gene.NPC.div.HCvsPD <- rownames(NPC.div.HCvsPD)
+
+
+NPC.div.HCvsPDiso <- as.data.frame(list.results$`NPC-div`$contrast_results$`DiseaseStatus HC vs PD-iso`)
+NPC.div.HCvsPDiso <- NPC.div.HCvsPDiso %>% filter(padj < 0.1)
+gene.NPC.div.HCvsPDiso <- rownames(NPC.div.HCvsPDiso)
+
+NPC.div.PDvsPDiso <- as.data.frame(list.results$`NPC-div`$contrast_results$`DiseaseStatus PD vs PD-iso`)
+NPC.div.PDvsPDiso <- NPC.div.PDvsPDiso %>% filter(padj < 0.1)
+gene.NPC.div.PDvsPDiso <- rownames(NPC.div.PDvsPDiso)
+
+print(gene.NPC.div.PDvsPDiso)
+# sort
+gene.NPC.div.HCvsPDiso <- sort(gene.NPC.div.HCvsPDiso)
+gene.NPC.div.HCvsPD <- sort(gene.NPC.div.HCvsPD)
+
+# Find overlapping genes
+overlapping_genes <- intersect(gene.NPC.div.HCvsPDiso, gene.NPC.div.HCvsPD)
+
+# Find unique genes in each vector
+unique_genes_g1 <- setdiff(gene.NPC.div.HCvsPDiso, gene.NPC.div.HCvsPD)
+unique_genes_g2 <- setdiff(gene.NPC.div.HCvsPD, gene.NPC.div.HCvsPDiso)
+
+# Print the results
+cat("Overlapping genes:", overlapping_genes, "\n")
+cat("Unique genes in gene.NPC.div.HCvsPDiso:", unique_genes_g1, "\n")
+cat("Unique genes in gene.NPC.div.HCvsPD:", unique_genes_g2, "\n")
+
+
+
+
+```
+
+Make a VENN diagram
+
+```{r}
+
+library(ggvenn)
+contrast.list <- list("HCvsPD" = gene.NPC.div.HCvsPD ,
+                      "HCvsPDiso" = gene.NPC.div.HCvsPDiso,
+                      "PDvsPDiso" = gene.NPC.div.PDvsPDiso)
+# plot the VENN
+
+
+
+ggvenn(
+  contrast.list, 
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.75, set_name_size = 5, show_percentage = FALSE, text_size = 5, fill_alpha = 0.75
+  )
+
+
+```
+
+
+
 
 
 ```{r}
@@ -1094,5 +1217,8 @@ EnhancedVolcano(res.NPC,
     #legendIconSize = 10,
     ) 
 ```
+
+
+
 
 

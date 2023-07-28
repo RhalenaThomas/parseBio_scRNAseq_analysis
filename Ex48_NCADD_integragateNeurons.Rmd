@@ -671,3 +671,442 @@ saveRDS(seu, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48we
 ```
 
 
+Get the aggregated expression and calculate differential gene expression
+
+```{r}
+Idents(seu) <- "Celltypes2"
+sum_counts <- AggregateExpression(seu, assay = "RNA", group.by = c("Celltypes2","Line","DiseaseStatus"))
+# this creates a list
+sum_counts_df <- as.data.frame(sum_counts$RNA)
+head(sum_counts_df)
+class(sum_counts_df)
+dim(sum_counts_df)
+# dataframe with rows as genes and columns as the sample names 
+# names include celltype_line_diseasestatus
+
+# example NPC-div_2965_PD
+
+write.csv(sum_counts_df, "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/Ex2NeuronsPDvsHCaggregateSumbyCelltype.csv")
+
+
+```
+
+To run DGE we need to make the meta data table
+
+```{r}
+# Assuming df is the name of your dataframe
+df <- sum_counts_df
+
+sample <- as.data.frame(colnames(df))
+colnames(sample) <- "sample"
+print(sample$sample)
+
+
+# Extract values for "Line," and "DiseaseStatus" and "Celltype" using regular expressions
+
+# the order of these factors will be determined by order of the group.by variable in the sum_counts <- AggregateExpression(seu, assay = "RNA", group.by = c("Celltypes2","Line","DiseaseStatus"))
+
+
+sample_names <- sample$sample
+sample_info <- strsplit(sample_names, "_")
+sample_info <- do.call(rbind, sample_info)
+
+# Create new columns for "Batch," "Line," and "DiseaseStatus"
+sample$Celltype <- sample_info[, 1]
+sample$Line <- sample_info[, 2]
+sample$DiseaseStatus <- sample_info[, 3]
+
+# Display the updated dataframe
+print(sample)
+meta.df <- sample
+
+head(meta.df)
+df.meta <- meta.df
+
+```
+```{r}
+#library(DESeq2)
+Celltypes <- unique(df.meta$Celltype)
+df.trans <- as.data.frame(t(df))
+# Create an empty list to store the results for each cell type
+list.results <- vector("list", length(Celltypes))
+
+# Define all_contrasts based on unique levels in the DiseaseStatus column
+all_contrasts <- unique(df.meta$DiseaseStatus)
+
+# Loop through each cell type and perform DESeq analysis
+for (i in seq_along(Celltypes)) {
+  # Subset the expression dataframe by the current cell type
+  print(Celltypes[i])
+  df_sub <- df.trans[grepl(paste0("^", Celltypes[i], "_"), rownames(df.trans)), ]
+  print(dim(df_sub))
+  # test one cell group
+  #i = "NPC-div"
+  df.meta_sub <- df.meta[df.meta$Celltype == Celltypes[i], ]
+  print(dim(df.meta_sub))
+  # Prepare the DESeq object
+  dft <- as.data.frame(t(df_sub)) # Transpose the subset dataframe to get genes as rows and samples as columns
+  dfi <- lapply(dft, as.integer)
+  dfi <- as.data.frame(dfi)
+  rownames(dfi) <- rownames(dft)
+  
+  # Check if the DiseaseStatus has at least two unique values
+  if (length(unique(df.meta_sub$DiseaseStatus)) >= 2) {
+    # Create the DESeqDataSet object using the subset dataframe and metadata
+    dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta_sub, design = ~DiseaseStatus)
+    # Perform DESeq analysis
+    dds <- DESeq(dds)
+    # Store the DESeq results in the list with the cell type as the list index
+    res <- results(dds)
+    list2 <- list()
+    list2[["dds"]] <- dds
+    list2[["results"]] <- res
+    
+    # Initialize an empty list to store the results for each contrast
+    if (length(all_contrasts) > 1) {
+      all_results <- list()
+      # Loop through each contrast and calculate the results
+      for (j in 1:(length(all_contrasts) - 1)) {
+        for (k in (j + 1):length(all_contrasts)) {
+          contrast_level1 <- all_contrasts[j]
+          contrast_level2 <- all_contrasts[k]
+
+          # Check if both levels have at least one sample
+          if (any(dds$DiseaseStatus %in% c(contrast_level1, contrast_level2))) {
+            # Check if contrast levels are different
+            if (contrast_level1 != contrast_level2) {
+              contrast_name <- paste("DiseaseStatus", contrast_level1, "vs", contrast_level2)
+              # Filter rows with complete cases for the current contrast levels
+              complete_cases <- complete.cases(dds$DiseaseStatus, dds$DiseaseStatus %in% c(contrast_level1, contrast_level2))
+              # Subset the DESeq object and calculate the contrast results
+              dds_sub <- dds[complete_cases, ]
+
+              # Check if both levels still exist in the subset after removing missing values
+              if (contrast_level1 %in% unique(dds_sub$DiseaseStatus) && contrast_level2 %in% unique(dds_sub$DiseaseStatus)) {
+                contrast_result <- results(dds_sub, contrast = c("DiseaseStatus", contrast_level1, contrast_level2), name = contrast_name)
+                all_results[[contrast_name]] <- contrast_result
+              } else {
+                message(paste("Skipping", contrast_name, "due to missing contrast levels in DiseaseStatus."))
+              }
+            } else {
+              message(paste("Skipping", contrast_level1, "vs", contrast_level2, "since they are the same level."))
+            }
+          }
+        }
+      }
+      
+      # Add the contrast results to the list
+      list2[["contrast_results"]] <- all_results
+    }
+  
+    # Store the list for the current cell type in the appropriate slot
+    list.results[[i]] <- list2
+  } else {
+    message(paste("Skipping", Celltypes[i], "due to insufficient unique values in DiseaseStatus."))
+  }
+}
+
+names(list.results) <- Celltypes
+
+# @Michael - we should save the list
+# @Michael - each save each dataframe
+
+# one example
+result <- as.data.frame(list.results[[1]][["contrast_results"]][[1]])
+result <- as.data.frame(list.results[["imNeurons-DA"]][["contrast_results"]][["DiseaseStatus PD vs HC"]])
+
+head(result)
+write.csv(result, paste("output_path/DGE_imNeurons-DA_PDvsHC.csv"))
+
+# make a saving loop 
+celltypes.res <- names(list.results)
+outputpath <- "user/defined/"
+for (i in celltypes.res){
+  for (j in length(names(list.results[[i]][["contrast_results"]]))){
+    result <- as.data.frame(list.results[[i]][["contrast_results"]][[j]])
+    celltype <- i
+    contrast <- names(list.results[[i]][["contrast_results"]])
+    write.csv(result, paste(outputpath,"DGE",celltype,contrast,".csv", sep = ""))
+  }
+}
+
+celltypes.res <- names(list.results)
+outputpath <- "/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/Neurons_DGE_PDvsHC/"
+for (i in celltypes.res){
+  for (contrast_name in names(list.results[[i]][["contrast_results"]])) {
+    result <- as.data.frame(list.results[[i]][["contrast_results"]][[contrast_name]])
+    result$Gene <- rownames(result)
+    celltype <- i
+    contrast <- contrast_name
+    write.csv(result, file = paste(outputpath, "DGE", celltype, contrast, ".csv", sep = ""), row.names = FALSE)
+  }
+}
+
+
+
+
+
+
+
+```
+A summarize results function
+
+```{r}
+summarize_contrast <- function(result, 
+                               adjp_threshold = 0.05,
+                               logfoldchange_thesh = 0) {
+  num_de_genes <- sum(result$padj <= adjp_threshold, na.rm = TRUE)
+  num_downregulated <- sum(result$padj <= adjp_threshold & result$log2FoldChange <= -logfoldchange_thesh, na.rm = TRUE)
+  num_upregulated <- sum(result$padj <= adjp_threshold & result$log2FoldChange >= logfoldchange_thesh, na.rm = TRUE)
+  
+  return(data.frame(NumGenes = num_de_genes, NumDownregulated = num_downregulated, NumUpregulated = num_upregulated))
+}
+
+```
+
+Run the summary
+```{r}
+
+# Initialize an empty list to store the summary results for each cell type and contrast
+summary_results_list <- vector("list", length(Celltypes))
+names(summary_results_list) <- Celltypes
+
+# Loop through each cell type and summarize the results for each contrast
+for (i in seq_along(Celltypes)) {
+  # Get the results for the current cell type
+  all_results_celltype <- list.results[[Celltypes[i]]][["contrast_results"]]
+  
+  # Initialize lists to store the summary results for each contrast
+  contrasts <- names(all_results_celltype)
+  num_contrasts <- length(contrasts)
+  celltype_summary <- data.frame(
+    Celltype = rep(Celltypes[i], num_contrasts),
+    Contrast = contrasts,
+    DGE_total = numeric(num_contrasts),
+    DGE_up = numeric(num_contrasts),
+    DGE_down = numeric(num_contrasts)
+  )
+  
+  # Loop through each contrast and summarize the results
+  for (j in seq_along(contrasts)) {
+    contrast_name <- contrasts[j]
+    contrast_result <- all_results_celltype[[contrast_name]]
+    summary_result <- summarize_contrast(contrast_result,
+                                         adjp_threshold = 0.1,
+                                         logfoldchange_thesh = 0)
+    
+    # Store the summary results for the current contrast
+    celltype_summary[j, "DGE_total"] <- summary_result$NumGenes
+    celltype_summary[j, "DGE_up"] <- summary_result$NumUpregulated
+    celltype_summary[j, "DGE_down"] <- summary_result$NumDownregulated
+  }
+  
+  # Store the summary results for the current cell type
+  summary_results_list[[Celltypes[i]]] <- celltype_summary
+}
+
+# Combine all the summary results into a single data frame
+summary_table <- do.call(rbind, summary_results_list)
+write.csv(summary_table,"/Users/rhalenathomas/Documents/Data/scRNAseq/ParseExample/Ex2_48well/Neurons_DGE_PDvsHC/DGEsummarytable.csv")
+# Print the summary table
+print(summary_table)
+
+```
+
+```{r, fig.height= 5}
+res <- list.results$`imNeuron-DA`$contrast_results$`DiseaseStatus PD vs HC`
+library(EnhancedVolcano)
+EnhancedVolcano(res,
+    lab = rownames(res),
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    #ylim = c(0,20),
+    #xlim = c(-2,2),
+    pCutoff = 0.001,
+    FCcutoff = 1,
+    pointSize = 5.0,
+    labSize = 5, 
+    #legendLabSize = 20,
+    #subtitleLabSize = 20,
+    #legendIconSize = 10,
+    ) 
+
+
+
+```
+Check enrichR
+
+```{r}
+DGE <- as.data.frame(res)
+
+class(DGE)
+DGE$X <- rownames(DGE)
+head(DGE)
+```
+
+
+```{r}
+
+library(enrichR)
+setEnrichrSite("Enrichr") # Human genes
+# list of all the databases
+# get the possible libraries
+dbs <- listEnrichrDbs()
+
+# this will list the possible libraries
+dbs
+
+# select libraries with cell types
+db <- c('KEGG_2019_Human','GWAS_Catalog_2019',"GO_Biological_Process_2023",
+        "GO_Cellular_Component_2023","GO_Molecular_Function_2023")
+
+# function for a quick look - the names for filtering need to match the column names
+getGSA <- function(dataframe, up_or_down = "up", LFCthresh = 0.01,
+                          pval_thresh = 0.05){
+  if(up_or_down == "up"){
+      genelist <- dataframe %>% filter(log2FoldChange >= LFCthresh & padj < pval_thresh)
+  }else if (up_or_down == "down") {
+      genelist <- dataframe %>% filter(log2FoldChange <= LFCthresh & padj < pval_thresh)
+  } else {
+    genelist <- dataframe %>% filter(padj < pval_thresh)
+  }
+genes <- genelist$X
+  # the cell type libraries
+  # get the results for each library
+  results <- enrichr(genes, databases = db)
+  # visualize the results
+  
+print(plotEnrich(results[[1]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'KEGG'))
+print(plotEnrich(results[[2]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GWAS'))
+print(plotEnrich(results[[3]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GObio'))
+print(plotEnrich(results[[4]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GOcell'))
+print(plotEnrich(results[[5]], showTerms = 20, numChar = 40, y = "Count", orderBy = "P.value", title = 'GOmol'))
+return(results)
+}
+
+
+```
+```{r}
+
+GOall <- getGSA(DGE, up_or_down = "both",
+                LFCthresh = 0,
+                pval_thresh = 0.5)
+
+GOup <- getGSA(DGE, up_or_down = "up",
+                LFCthresh = 0,
+                pval_thresh = 0.5)
+
+GOdown <- getGSA(DGE, up_or_down = "down",
+                LFCthresh = 0,
+                pval_thresh = 0.5)
+
+
+```
+
+```{r}
+
+gene <- (DGE %>% filter(log2FoldChange >= 0 & padj < 0.05))$X
+length(gene) 
+# 18
+gene <- (DGE %>% filter(padj < 0.05))$X
+length(gene) # 29
+gene <- (DGE %>% filter(padj < 0.1))$X
+length(gene) # 44
+gene <- (DGE %>% filter(pvalue < 0.01))$X
+length(gene) # 262
+
+gene <- (DGE %>% filter(pvalue < 0.001))$X
+length(gene) # 83
+
+gene <- (DGE %>% filter(padj < 0.5))$X
+length(gene) # 170
+
+df.filt <- DGE %>% filter(padj < 0.5)
+
+```
+
+
+Make a dot plot for selected genes. 
+
+```{r}
+# subset immature DA neurons
+Idents(seu) <- "Celltypes2"
+levels(seu)
+
+DAN <- subset(seu, idents = "imNeuron-DA")
+
+```
+
+Dotplots 
+
+```{r,fig.height=2.5}
+ft <- c("TPH1","GJD2","NRP1","PRUNE2","TCF7L2",
+        "LAMP5","ITGA8","ITGA9","HOXD3","PRTG","P2RX2")
+
+DotPlot(DAN, features = ft, group.by = "DiseaseStatus") +RotatedAxis()
+
+```
+
+
+
+Show the PC plots
+Right now it's only one cell type at time
+
+```{r}
+vsdata <- varianceStabilizingTransformation(list.results$`imNeuron-DA`$dds)
+
+plotPCA(vsdata, intgroup="DiseaseStatus")
+plotPCA(vsdata, intgroup="Line")
+plotPCA(vsdata, intgroup="Sample")
+
+
+
+```
+
+Check with everything
+
+```{r}
+
+library(DESeq2)
+# the input is a dataframe with only expression values no meta data
+# the aggregate seurat function is already in this format
+# however to use only one cell type it needs to be subset in advance
+# here again I will use all the cell types
+dft <- df # columns are samples and genes are rows
+dim(dft)
+#prepare the dds object 
+# we need the transposed data frame no meta data
+
+dfi <- lapply(dft, as.integer)
+dfi <- as.data.frame(dfi)
+dim(dfi)
+rownames(dfi) <- rownames(dft)
+
+# here we need the meta data
+# was created above = df.meta
+# and we need what variable to compare
+
+dds <- DESeqDataSetFromMatrix(countData = dfi, colData = df.meta, design = ~DiseaseStatus)
+
+
+    
+```
+
+Now see the PCA
+
+```{r}
+
+vsdata <- varianceStabilizingTransformation(dds)
+
+plotPCA(vsdata, intgroup="DiseaseStatus")
+plotPCA(vsdata, intgroup="Line")
+plotPCA(vsdata, intgroup="sample")
+plotPCA(vsdata, intgroup = "Celltype")
+
+```
+
+
+
+
+
+
